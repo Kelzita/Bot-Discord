@@ -1607,7 +1607,7 @@ async def ajuda(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== INICIAR BOT ====================
+# ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE ====================
 if __name__ == "__main__":
     print("="*60)
     print("🚀 BOT FORT - VERSÃO COMPLETÍSSIMA COM SQLITE")
@@ -1630,9 +1630,44 @@ if __name__ == "__main__":
         print("Defina a variável de ambiente DISCORD_TOKEN")
         sys.exit(1)
     
-    try:
-        bot.run(TOKEN)
-    except discord.LoginFailure:
-        print("❌ Token inválido!")
-    except Exception as e:
-        print(f"❌ Erro: {e}")
+    # SISTEMA DE RECONEXÃO INTELIGENTE
+    tentativas = 0
+    max_tentativas = 10
+    tempo_espera = 5  # começa com 5 segundos
+    
+    while tentativas < max_tentativas:
+        try:
+            print(f"🔄 Tentativa {tentativas + 1} de conectar...")
+            bot.run(TOKEN)
+            break  # Se conectou, sai do loop
+            
+        except discord.LoginFailure:
+            print("❌ Token inválido! Verifique se o token está correto.")
+            sys.exit(1)
+            
+        except discord.HTTPException as e:
+            if e.status == 429:  # Erro de rate limit
+                tentativas += 1
+                print(f"⚠️ Rate limit detectado! Aguardando {tempo_espera} segundos... (Tentativa {tentativas}/{max_tentativas})")
+                print(f"⏰ Próxima tentativa em {tempo_espera}s")
+                time.sleep(tempo_espera)
+                tempo_espera *= 2  # Dobra o tempo (exponencial: 5, 10, 20, 40...)
+                
+                if tempo_espera > 300:  # Máximo 5 minutos
+                    tempo_espera = 300
+            else:
+                print(f"❌ Erro HTTP: {e}")
+                sys.exit(1)
+                
+        except Exception as e:
+            print(f"❌ Erro inesperado: {e}")
+            tentativas += 1
+            if tentativas >= max_tentativas:
+                print("❌ Número máximo de tentativas atingido. Desligando...")
+                sys.exit(1)
+            print(f"⏰ Tentando novamente em {tempo_espera} segundos...")
+            time.sleep(tempo_espera)
+    
+    if tentativas >= max_tentativas:
+        print("❌ Falha ao conectar após múltiplas tentativas.")
+
