@@ -11,6 +11,7 @@ from typing import Optional
 import math
 import sqlite3  # NOVO: import do SQLite
 import os
+import time
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -1670,4 +1671,5 @@ if __name__ == "__main__":
     
     if tentativas >= max_tentativas:
         print("❌ Falha ao conectar após múltiplas tentativas.")
+
 
