@@ -14,6 +14,10 @@ import os
 import time
 import logging
 
+# ===== ADICIONAR ESTES IMPORTS NO TOPO =====
+from flask import Flask, jsonify
+from threading import Thread
+
 # Configurar encoding e logging
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +25,39 @@ logging.basicConfig(level=logging.INFO)
 # Configurações
 PREFIX = '!'
 API_NINJAS_KEY = 'SUA_API_KEY'  # Opcional: para comandos de IA
+
+# ===== ADICIONAR ESTE CÓDIGO DO SERVIDOR WEB =====
+# Servidor web para o Render free tier
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "online",
+        "bot": "Fort Bot",
+        "sistemas": 50
+    })
+
+@app.route('/health')
+@app.route('/healthcheck')
+def health():
+    return "OK", 200
+
+@app.route('/ping')
+def ping():
+    return "pong", 200
+
+def run_webserver():
+    """Inicia o servidor web - OBRIGATÓRIO para o free tier do Render"""
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+def keep_alive():
+    """Mantém o bot vivo no free tier"""
+    server = Thread(target=run_webserver)
+    server.daemon = True
+    server.start()
+    print(f"✅ Servidor web rodando na porta {os.environ.get('PORT', 10000)}")
 
 class Fort(discord.Client):
     def __init__(self):
@@ -1676,9 +1713,15 @@ async def main():
                 print("❌ Número máximo de tentativas atingido. Desligando...")
                 break
 
+# ===== SUBSTITUIR A FUNÇÃO run_bot EXISTENTE POR ESTA =====
 def run_bot():
     """Função síncrona para executar o bot"""
     try:
+        # INICIAR SERVIDOR WEB (OBRIGATÓRIO PARA FREE TIER)
+        keep_alive()
+        print("🌐 Servidor de monitoramento ativo!")
+        print("✅ Render fará health checks")
+        
         asyncio.run(main())
     except KeyboardInterrupt:
         print("👋 Bot desligado pelo usuário")
