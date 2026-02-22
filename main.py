@@ -9,11 +9,14 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 import math
-import sqlite3  # NOVO: import do SQLite
+import sqlite3
 import os
 import time
+import logging
 
+# Configurar encoding e logging
 sys.stdout.reconfigure(encoding='utf-8')
+logging.basicConfig(level=logging.INFO)
 
 # Configurações
 PREFIX = '!'
@@ -41,11 +44,11 @@ class Fort(discord.Client):
         self.call_data = {}
         self.call_participants = {}
         
-        # NOVO: Inicializa banco de dados e carrega dados
+        # Inicializa banco de dados e carrega dados
         self.init_database()
         self.load_data()
     
-    # ===== NOVAS FUNÇÕES SQLITE =====
+    # ===== FUNÇÕES SQLITE =====
     def init_database(self):
         """Cria o banco de dados SQLite"""
         conn = sqlite3.connect('fort_bot.db')
@@ -1609,6 +1612,82 @@ async def ajuda(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE ====================
+async def main():
+    """Função principal assíncrona para iniciar o bot"""
+    token = os.environ.get('DISCORD_TOKEN')
+    if not token:
+        print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
+        print("👉 No Render, vá em Environment e adicione DISCORD_TOKEN")
+        return
+    
+    tentativas = 0
+    max_tentativas = 5
+    tempo_base = 5
+    
+    while tentativas < max_tentativas:
+        try:
+            tentativas += 1
+            print(f"🔄 Tentativa {tentativas} de conectar...")
+            
+            # Inicia o bot de forma assíncrona
+            async with bot:
+                await bot.start(token)
+            
+            # Se chegou aqui, conectou com sucesso
+            print("✅ Bot conectado e funcionando!")
+            break
+            
+        except discord.LoginFailure:
+            print("❌ Token inválido! Verifique se o token está correto.")
+            print("👉 Certifique-se de que o token no Render é exatamente o mesmo do Discord Developer Portal")
+            break
+            
+        except discord.HTTPException as e:
+            if e.status == 429:  # Rate limit
+                retry_after = int(e.response.headers.get('Retry-After', tempo_base))
+                print(f"⚠️ Rate limit! Discord pede para aguardar {retry_after} segundos...")
+                
+                if tentativas < max_tentativas:
+                    print(f"⏰ Aguardando {retry_after}s e tentando novamente...")
+                    await asyncio.sleep(retry_after)
+                else:
+                    print("❌ Máximo de tentativas atingido devido a rate limit.")
+                    break
+            else:
+                print(f"❌ Erro HTTP {e.status}: {e}")
+                if tentativas < max_tentativas:
+                    print(f"⏰ Tentando novamente em {tempo_base} segundos...")
+                    await asyncio.sleep(tempo_base)
+                else:
+                    print("❌ Máximo de tentativas atingido.")
+                    break
+                    
+        except asyncio.CancelledError:
+            print("👋 Bot desligado manualmente")
+            break
+            
+        except Exception as e:
+            print(f"❌ Erro inesperado: {type(e).__name__}: {e}")
+            if tentativas < max_tentativas:
+                print(f"⏰ Tentando novamente em {tempo_base} segundos... (Tentativa {tentativas}/{max_tentativas})")
+                await asyncio.sleep(tempo_base)
+                tempo_base = min(tempo_base * 1.5, 60)  # Aumenta gradualmente até 60s
+            else:
+                print("❌ Número máximo de tentativas atingido. Desligando...")
+                break
+
+def run_bot():
+    """Função síncrona para executar o bot"""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("👋 Bot desligado pelo usuário")
+    except Exception as e:
+        print(f"❌ Erro fatal: {e}")
+        # No Render, queremos que o processo reinicie em caso de erro fatal
+        # Então vamos sair com código de erro
+        sys.exit(1)
+
 if __name__ == "__main__":
     print("="*60)
     print("🚀 BOT FORT - VERSÃO COMPLETÍSSIMA COM SQLITE")
@@ -1623,53 +1702,8 @@ if __name__ == "__main__":
     print("✅ Banco de Dados SQLite (dados permanentes)")
     print("\n📊 TOTAL: 50+ COMANDOS!")
     print("="*60)
+    print(f"🔧 Modo: {'Produção' if os.environ.get('RENDER') else 'Desenvolvimento'}")
+    print("="*60)
     
-    # PEGA O TOKEN DA VARIÁVEL DE AMBIENTE
-    TOKEN = os.environ.get('DISCORD_TOKEN')
-    if not TOKEN:
-        print("❌ ERRO: Token não encontrado!")
-        print("Defina a variável de ambiente DISCORD_TOKEN")
-        sys.exit(1)
-    
-    # SISTEMA DE RECONEXÃO INTELIGENTE
-    tentativas = 0
-    max_tentativas = 10
-    tempo_espera = 5  # começa com 5 segundos
-    
-    while tentativas < max_tentativas:
-        try:
-            print(f"🔄 Tentativa {tentativas + 1} de conectar...")
-            bot.run(TOKEN)
-            break  # Se conectou, sai do loop
-            
-        except discord.LoginFailure:
-            print("❌ Token inválido! Verifique se o token está correto.")
-            sys.exit(1)
-            
-        except discord.HTTPException as e:
-            if e.status == 429:  # Erro de rate limit
-                tentativas += 1
-                print(f"⚠️ Rate limit detectado! Aguardando {tempo_espera} segundos... (Tentativa {tentativas}/{max_tentativas})")
-                print(f"⏰ Próxima tentativa em {tempo_espera}s")
-                time.sleep(tempo_espera)
-                tempo_espera *= 2  # Dobra o tempo (exponencial: 5, 10, 20, 40...)
-                
-                if tempo_espera > 300:  # Máximo 5 minutos
-                    tempo_espera = 300
-            else:
-                print(f"❌ Erro HTTP: {e}")
-                sys.exit(1)
-                
-        except Exception as e:
-            print(f"❌ Erro inesperado: {e}")
-            tentativas += 1
-            if tentativas >= max_tentativas:
-                print("❌ Número máximo de tentativas atingido. Desligando...")
-                sys.exit(1)
-            print(f"⏰ Tentando novamente em {tempo_espera} segundos...")
-            time.sleep(tempo_espera)
-    
-    if tentativas >= max_tentativas:
-        print("❌ Falha ao conectar após múltiplas tentativas.")
-
-
+    # Executa o bot
+    run_bot()
