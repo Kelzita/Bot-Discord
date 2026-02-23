@@ -13,6 +13,7 @@ import sqlite3
 import os
 import time
 import logging
+import traceback
 
 # ===== ADICIONAR ESTES IMPORTS NO TOPO =====
 from flask import Flask, jsonify
@@ -1651,11 +1652,16 @@ async def ajuda(interaction: discord.Interaction):
 # ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE ====================
 async def main():
     """Função principal assíncrona para iniciar o bot"""
+    print("🔵 INICIANDO FUNÇÃO MAIN")
     token = os.environ.get('DISCORD_TOKEN')
+    
     if not token:
         print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
         print("👉 No Render, vá em Environment e adicione DISCORD_TOKEN")
         return
+    
+    print(f"🔵 Token encontrado! Primeiros 5 caracteres: {token[:5]}...")
+    print(f"🔵 Tamanho do token: {len(token)} caracteres")
     
     tentativas = 0
     max_tentativas = 5
@@ -1666,17 +1672,29 @@ async def main():
             tentativas += 1
             print(f"🔄 Tentativa {tentativas} de conectar...")
             
-            # Inicia o bot de forma assíncrona
+            # Timeout de 30 segundos para a conexão
+            print("⏱️ Aguardando até 30 segundos pela conexão...")
+            
             async with bot:
-                await bot.start(token)
+                # Adiciona timeout para não travar
+                await asyncio.wait_for(bot.start(token), timeout=30.0)
             
             # Se chegou aqui, conectou com sucesso
-            print("✅ Bot conectado e funcionando!")
+            print("✅✅✅ BOT CONECTADO COM SUCESSO! ✅✅✅")
             break
             
+        except asyncio.TimeoutError:
+            print(f"⏰ TIMEOUT: Tentativa {tentativas} demorou mais de 30 segundos")
+            if tentativas < max_tentativas:
+                print(f"🔄 Tentando novamente em {tempo_base} segundos...")
+                await asyncio.sleep(tempo_base)
+                tempo_base = min(tempo_base * 1.5, 30)
+            else:
+                print("❌ Número máximo de tentativas atingido devido a timeout.")
+                
         except discord.LoginFailure:
-            print("❌ Token inválido! Verifique se o token está correto.")
-            print("👉 Certifique-se de que o token no Render é exatamente o mesmo do Discord Developer Portal")
+            print("❌ TOKEN INVÁLIDO! Verifique se o token está correto.")
+            print("👉 Vá no Discord Developer Portal e gere um novo token")
             break
             
         except discord.HTTPException as e:
@@ -1685,7 +1703,7 @@ async def main():
                 print(f"⚠️ Rate limit! Discord pede para aguardar {retry_after} segundos...")
                 
                 if tentativas < max_tentativas:
-                    print(f"⏰ Aguardando {retry_after}s e tentando novamente...")
+                    print(f"⏰ Aguardando {retry_after}s...")
                     await asyncio.sleep(retry_after)
                 else:
                     print("❌ Máximo de tentativas atingido devido a rate limit.")
@@ -1704,36 +1722,41 @@ async def main():
             break
             
         except Exception as e:
-            print(f"❌ Erro inesperado: {type(e).__name__}: {e}")
+            print(f"❌ Erro inesperado: {type(e).__name__}")
+            print(f"❌ Detalhes: {str(e)}")
+            traceback.print_exc()
+            
             if tentativas < max_tentativas:
                 print(f"⏰ Tentando novamente em {tempo_base} segundos... (Tentativa {tentativas}/{max_tentativas})")
                 await asyncio.sleep(tempo_base)
-                tempo_base = min(tempo_base * 1.5, 60)  # Aumenta gradualmente até 60s
+                tempo_base = min(tempo_base * 1.5, 30)
             else:
                 print("❌ Número máximo de tentativas atingido. Desligando...")
                 break
 
-# ===== SUBSTITUIR A FUNÇÃO run_bot EXISTENTE POR ESTA =====
 def run_bot():
     """Função síncrona para executar o bot"""
+    print("🟢 INICIANDO FUNÇÃO RUN_BOT")
     try:
         # INICIAR SERVIDOR WEB (OBRIGATÓRIO PARA FREE TIER)
+        print("🟢 Iniciando servidor web...")
         keep_alive()
-        print("🌐 Servidor de monitoramento ativo!")
-        print("✅ Render fará health checks")
+        print("✅ Servidor web ativo!")
         
+        print("🟢 Iniciando bot principal...")
         asyncio.run(main())
+        
     except KeyboardInterrupt:
-        print("👋 Bot desligado pelo usuário")
+        print("👋 Bot desligado manualmente")
     except Exception as e:
-        print(f"❌ Erro fatal: {e}")
-        # No Render, queremos que o processo reinicie em caso de erro fatal
-        # Então vamos sair com código de erro
+        print(f"❌ Erro fatal em run_bot: {type(e).__name__}")
+        print(f"❌ Detalhes: {str(e)}")
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 BOT FORT - VERSÃO COMPLETÍSSIMA COM SQLITE")
+    print("🚀 INICIANDO BOT FORT")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
     print("✅ Sistema de Chamadas (com lista de presença)")
@@ -1745,7 +1768,7 @@ if __name__ == "__main__":
     print("✅ Banco de Dados SQLite (dados permanentes)")
     print("\n📊 TOTAL: 50+ COMANDOS!")
     print("="*60)
-    print(f"🔧 Modo: {'Produção' if os.environ.get('RENDER') else 'Desenvolvimento'}")
+    print(f"🔧 Modo: {'PRODUÇÃO (Render)' if os.environ.get('RENDER') else 'DESENVOLVIMENTO (Local)'}")
     print("="*60)
     
     # Executa o bot
