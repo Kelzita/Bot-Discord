@@ -18,7 +18,7 @@ import traceback
 # ===== CONFIGURAÇÃO DO TOKEN =====
 # INSTRUÇÕES: Substitua 'SEU_TOKEN_AQUI' pelo token do seu bot do Discord
 # Para obter o token: https://discord.com/developers/applications
-TOKEN_DO_BOT = 'TOKEN_DISCORD'  # <--- COLE SEU TOKEN AQUI
+DISCORD_TOKEN = 'TOKEN_DISCORD'  # <--- COLE SEU TOKEN AQUI
 
 # ===== ADICIONAR ESTES IMPORTS NO TOPO =====
 from flask import Flask, jsonify
@@ -1791,5 +1791,6 @@ if __name__ == "__main__":
     
     # Executa o bot
     run_bot()
+
 
 
