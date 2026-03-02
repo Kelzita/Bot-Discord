@@ -15,6 +15,11 @@ import time
 import logging
 import traceback
 
+# ===== CONFIGURAÇÃO DO TOKEN =====
+# INSTRUÇÕES: Substitua 'SEU_TOKEN_AQUI' pelo token do seu bot do Discord
+# Para obter o token: https://discord.com/developers/applications
+TOKEN_DO_BOT = 'MTQ3NDYxNDcyNzc2NTI2NjQzMg.GBPz_4.qU1WcJ5qgGJkTlJhU16K159Pai7VHQ8qPBcMAc'  # <--- COLE SEU TOKEN AQUI
+
 # ===== ADICIONAR ESTES IMPORTS NO TOPO =====
 from flask import Flask, jsonify
 from threading import Thread
@@ -1653,11 +1658,24 @@ async def ajuda(interaction: discord.Interaction):
 async def main():
     """Função principal assíncrona para iniciar o bot"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
-    token = os.environ.get('DISCORD_TOKEN')
+    
+    # ===== PRIORIDADE 1: USAR TOKEN DO ARQUIVO =====
+    token = TOKEN_DO_BOT
+    
+    # ===== PRIORIDADE 2: SE NÃO TIVER NO ARQUIVO, TENTA VARIÁVEL DE AMBIENTE =====
+    if token == 'SEU_TOKEN_AQUI':
+        print("⚠️ Token não configurado no arquivo! Tentando variável de ambiente...")
+        token = os.environ.get('DISCORD_TOKEN')
     
     if not token:
-        print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
-        print("👉 No Render, vá em Environment e adicione DISCORD_TOKEN")
+        print("❌ ERRO CRÍTICO: Token não encontrado!")
+        print("👉 OPÇÃO 1: Edite o arquivo e substitua 'SEU_TOKEN_AQUI' pelo seu token")
+        print("👉 OPÇÃO 2: No Render, vá em Environment e adicione DISCORD_TOKEN")
+        print("\n📌 Como obter o token:")
+        print("1. Acesse https://discord.com/developers/applications")
+        print("2. Crie ou selecione seu bot")
+        print("3. Vá em 'Bot' no menu lateral")
+        print("4. Clique em 'Reset Token' ou 'Copy'")
         return
     
     print(f"🔵 Token encontrado! Primeiros 5 caracteres: {token[:5]}...")
