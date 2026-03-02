@@ -40,7 +40,7 @@ def home():
     return jsonify({
         "status": "online",
         "bot": "Fort Bot",
-        "sistemas": 50
+        "sistemas": 70
     })
 
 @app.route('/health')
@@ -241,12 +241,14 @@ class Fort(discord.Client):
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
         print(f"📢 Sistema de Chamadas: ATIVO")
+        print(f"⏰ Chamada com Tempo: ATIVO")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
         print(f"🎮 Sistema de Jogos: ATIVO")
+        print(f"🎭 Comandos com GIF: ATIVO")
         print(f"💾 Banco de Dados: SQLite")
-        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda"))
+        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 70+ comandos!"))
 
 bot = Fort()
 
@@ -593,6 +595,226 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
     
     bot.save_data()
     await interaction.response.send_message("✅ Chamada cancelada!", ephemeral=True)
+
+# ==================== SISTEMA DE CHAMADA COM TEMPO LIMITE ====================
+
+class CallButtonComTempo(Button):
+    def __init__(self, call_id: str, emoji: str, expira_em: datetime):
+        super().__init__(
+            style=discord.ButtonStyle.success,
+            label="Confirmar Presença",
+            emoji=emoji,
+            custom_id=f"call_tempo_{call_id}"
+        )
+        self.call_id = call_id
+        self.expira_em = expira_em
+    
+    async def callback(self, interaction: discord.Interaction):
+        # Verifica se expirou
+        if datetime.now() > self.expira_em:
+            await interaction.response.send_message("⏰ **Esta chamada EXPIROU!** O tempo de confirmação acabou.", ephemeral=True)
+            return
+            
+        try:
+            user_id = str(interaction.user.id)
+            call_id = self.call_id
+            
+            if call_id not in bot.call_data:
+                await interaction.response.send_message("❌ Esta chamada não existe mais!", ephemeral=True)
+                return
+            
+            call = bot.call_data[call_id]
+            
+            if call_id not in bot.call_participants:
+                bot.call_participants[call_id] = []
+            
+            if user_id in bot.call_participants[call_id]:
+                await interaction.response.send_message("❌ Você já confirmou presença!", ephemeral=True)
+                return
+            
+            bot.call_participants[call_id].append(user_id)
+            bot.save_data()
+            
+            # ATUALIZA EMBED
+            try:
+                channel = bot.get_channel(int(call['channel_id']))
+                if channel:
+                    message = await channel.fetch_message(int(call['message_id']))
+                    if message and message.embeds:
+                        embed = message.embeds[0]
+                        
+                        # Cria lista de participantes
+                        participantes_text = ""
+                        participantes_list = []
+                        
+                        for pid in bot.call_participants[call_id]:
+                            member = interaction.guild.get_member(int(pid))
+                            if member:
+                                participantes_list.append(member.mention)
+                        
+                        if participantes_list:
+                            if len(participantes_list) <= 20:
+                                for i, mention in enumerate(participantes_list, 1):
+                                    participantes_text += f"{i}. {mention}\n"
+                            else:
+                                for i, mention in enumerate(participantes_list[:20], 1):
+                                    participantes_text += f"{i}. {mention}\n"
+                                participantes_text += f"\n... e mais {len(participantes_list) - 20} pessoas"
+                        else:
+                            participantes_text = "Ninguém confirmou ainda"
+                        
+                        # Cria novo embed
+                        novo_embed = discord.Embed(
+                            title=embed.title,
+                            description=embed.description,
+                            color=discord.Color.blue()
+                        )
+                        
+                        for field in embed.fields:
+                            if not field.name.startswith("✅ Confirmados") and not field.name.startswith("⏰ Expira"):
+                                novo_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                        
+                        novo_embed.add_field(
+                            name=f"✅ **Confirmados: {len(bot.call_participants[call_id])}**",
+                            value=participantes_text,
+                            inline=False
+                        )
+                        
+                        if embed.thumbnail:
+                            novo_embed.set_thumbnail(url=embed.thumbnail.url)
+                        if embed.footer:
+                            novo_embed.set_footer(text=embed.footer.text)
+                        if embed.timestamp:
+                            novo_embed.timestamp = embed.timestamp
+                        
+                        await message.edit(embed=novo_embed)
+            except Exception as e:
+                print(f"Erro ao atualizar embed: {e}")
+            
+            # MENSAGEM PRIVADA
+            try:
+                embed_privado = discord.Embed(
+                    title="✅ PRESENÇA CONFIRMADA!",
+                    description=f"**{call['titulo']}**",
+                    color=discord.Color.green()
+                )
+                
+                embed_privado.add_field(name="📅 Data", value=call['data_hora'], inline=True)
+                embed_privado.add_field(name="📍 Local", value=call['local'], inline=True)
+                
+                if call['descricao']:
+                    embed_privado.add_field(name="📝 Descrição", value=call['descricao'][:100], inline=False)
+                
+                embed_privado.add_field(name="👤 Organizador", value=f"<@{call['criador_id']}>", inline=True)
+                embed_privado.add_field(name="📊 Total", value=f"{len(bot.call_participants[call_id])} confirmados", inline=True)
+                embed_privado.set_footer(text="Obrigado por confirmar! 🎉")
+                
+                await interaction.user.send(embed=embed_privado)
+            except:
+                pass
+            
+            await interaction.response.send_message(
+                f"✅ **Presença confirmada!** Agora temos **{len(bot.call_participants[call_id])}** confirmado(s)!",
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            print(f"Erro no botão: {e}")
+            await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+class CallViewComTempo(View):
+    def __init__(self, call_id: str, emoji: str, expira_em: datetime):
+        super().__init__(timeout=None)
+        self.add_item(CallButtonComTempo(call_id, emoji, expira_em))
+
+@bot.tree.command(name="chamada_tempo", description="⏰ Criar chamada com tempo limite")
+@app_commands.describe(
+    titulo="Título do evento",
+    data_hora="Data e hora (ex: 25/12 às 20h)",
+    local="Local do evento",
+    horas_limite="Horas para expirar (ex: 2)",
+    descricao="Descrição detalhada",
+    emoji="Emoji do botão (padrão: ✅)"
+)
+async def chamada_tempo(
+    interaction: discord.Interaction,
+    titulo: str,
+    data_hora: str,
+    local: str,
+    horas_limite: int = 2,
+    descricao: str = "",
+    emoji: str = "✅"
+):
+    if not interaction.user.guild_permissions.mention_everyone:
+        await interaction.response.send_message("❌ Você precisa da permissão `Mencionar @everyone`!", ephemeral=True)
+        return
+    
+    if not interaction.guild.me.guild_permissions.mention_everyone:
+        await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
+        return
+    
+    call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
+    expira_em = datetime.now() + timedelta(hours=horas_limite)
+    
+    embed = discord.Embed(
+        title=f"📢 {titulo}",
+        description=descricao if descricao else "Clique no botão para confirmar presença!",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="📅 Data/Hora", value=data_hora, inline=True)
+    embed.add_field(name="📍 Local", value=local, inline=True)
+    embed.add_field(name="👤 Organizador", value=interaction.user.mention, inline=True)
+    embed.add_field(name="⏰ Expira em", value=f"<t:{int(expira_em.timestamp())}:R>", inline=True)
+    embed.add_field(name="✅ **Confirmados: 0**", value="Ninguém confirmou ainda", inline=False)
+    
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    
+    embed.set_footer(text="Após expirar, o botão não funcionará mais!")
+    embed.timestamp = datetime.now()
+    
+    view = CallViewComTempo(call_id, emoji, expira_em)
+    
+    await interaction.response.send_message(
+        content="@everyone 📢 **NOVA CHAMADA COM TEMPO LIMITE!** 📢",
+        embed=embed,
+        view=view,
+        allowed_mentions=discord.AllowedMentions(everyone=True)
+    )
+    
+    message = await interaction.original_response()
+    
+    bot.call_data[call_id] = {
+        'titulo': titulo,
+        'data_hora': data_hora,
+        'local': local,
+        'descricao': descricao,
+        'criador_id': str(interaction.user.id),
+        'criador_nome': interaction.user.name,
+        'channel_id': str(interaction.channel.id),
+        'message_id': str(message.id),
+        'emoji': emoji,
+        'expira_em': expira_em.isoformat(),
+        'criado_em': datetime.now().isoformat()
+    }
+    
+    bot.call_participants[call_id] = []
+    bot.save_data()
+    
+    embed_confirm = discord.Embed(
+        title="✅ Chamada Criada com Tempo!",
+        description=f"**{titulo}** criada com sucesso!",
+        color=discord.Color.green()
+    )
+    
+    embed_confirm.add_field(
+        name="⏰ Expira",
+        value=f"<t:{int(expira_em.timestamp())}:R>",
+        inline=False
+    )
+    
+    await interaction.followup.send(embed=embed_confirm, ephemeral=True)
 
 # ==================== SISTEMA DE SHIP COMPLETO ====================
 
@@ -1489,7 +1711,7 @@ async def calcular(interaction: discord.Interaction, num1: float, operador: str,
 async def ola_mundo(interaction: discord.Interaction):
     await interaction.response.send_message(f"Olá {interaction.user.mention}! Bem-vindo ao bot Fort! 🎉")
 
-# ==================== COMANDOS DE DIVERSÃO ====================
+# ==================== COMANDOS DE DIVERSÃO (ANTIGOS) ====================
 
 @bot.tree.command(name="8ball", description="🎱 Pergunte ao destino")
 async def eight_ball(interaction: discord.Interaction, pergunta: str):
@@ -1537,18 +1759,6 @@ async def fato(interaction: discord.Interaction):
     
     await interaction.response.send_message(f"🔍 {random.choice(fatos)}")
 
-@bot.tree.command(name="cafune", description="🥰 Faça carinho")
-async def cafune(interaction: discord.Interaction, membro: discord.Member):
-    await interaction.response.send_message(f"{interaction.user.mention} fez carinho em {membro.mention}! 🥰")
-
-@bot.tree.command(name="beijo", description="💋 Beije alguém")
-async def beijo(interaction: discord.Interaction, membro: discord.Member):
-    await interaction.response.send_message(f"{interaction.user.mention} beijou {membro.mention}! 💋")
-
-@bot.tree.command(name="abraço", description="🤗 Abrace alguém")
-async def abraco(interaction: discord.Interaction, membro: discord.Member):
-    await interaction.response.send_message(f"{interaction.user.mention} abraçou {membro.mention}! 🤗")
-
 @bot.tree.command(name="baitola", description="🏳️‍🌈 Mensagem especial")
 async def baitola(interaction: discord.Interaction, membro: discord.Member):
     frases = [
@@ -1557,19 +1767,347 @@ async def baitola(interaction: discord.Interaction, membro: discord.Member):
     ]
     await interaction.response.send_message(random.choice(frases))
 
-# ==================== COMANDO DE AJUDA COMPLETO ====================
+# ==================== COMANDOS COM GIFS ====================
+
+gifs_abraco = [
+    "https://media.giphy.com/media/3ZnBrkqoaI2hq/giphy.gif",
+    "https://media.giphy.com/media/od5H3PmEG5EVq/giphy.gif",
+    "https://media.giphy.com/media/lrr9rHuoJOE0w/giphy.gif",
+    "https://media.giphy.com/media/13d2jHlSlxklVe/giphy.gif",
+    "https://media.giphy.com/media/wnsgren9NtITS/giphy.gif",
+    "https://media.giphy.com/media/PHZ7v9tfQu0o0/giphy.gif",
+    "https://media.giphy.com/media/3o7abB06u9bNzA8LC8/giphy.gif",
+    "https://media.giphy.com/media/l2JegQYezBkR90gFm/giphy.gif"
+]
+
+gifs_beijo = [
+    "https://media.giphy.com/media/bGm9FuBCGg4SY/giphy.gif",
+    "https://media.giphy.com/media/G3va31oEEnIkM/giphy.gif",
+    "https://media.giphy.com/media/12VXIxKaIEarL2/giphy.gif",
+    "https://media.giphy.com/media/hnNyVPIXgLdle/giphy.gif",
+    "https://media.giphy.com/media/flmwfIpFVrSKI/giphy.gif",
+    "https://media.giphy.com/media/3oz8xIZrAhijabg8YM/giphy.gif",
+    "https://media.giphy.com/media/3o7abKhOpu0N2tWqVO/giphy.gif",
+    "https://media.giphy.com/media/26gs9kSN6d5PxSsQU/giphy.gif"
+]
+
+gifs_carinho = [
+    "https://media.giphy.com/media/4HP0ddZnNVvKU/giphy.gif",
+    "https://media.giphy.com/media/109ltuoSQT212w/giphy.gif",
+    "https://media.giphy.com/media/xT0BKiwjg0O6yIR2o/giphy.gif",
+    "https://media.giphy.com/media/3o7abpRrPjBne2h2Qw/giphy.gif",
+    "https://media.giphy.com/media/l0MYt5jH6gkTWm8qo/giphy.gif",
+    "https://media.giphy.com/media/xT0Gqn9yI8Edh6L7W0/giphy.gif",
+    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
+    "https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif"
+]
+
+gifs_tapa = [
+    "https://media.giphy.com/media/uG3lKkAuh53wc/giphy.gif",
+    "https://media.giphy.com/media/j3iGKfXRKlLqw/giphy.gif",
+    "https://media.giphy.com/media/3oxHQq4M0xGpWpU2g/giphy.gif",
+    "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif",
+    "https://media.giphy.com/media/3o7TKz2fL6f5T7d6cU/giphy.gif"
+]
+
+gifs_festa = [
+    "https://media.giphy.com/media/l0MYEqEzwMWFCg8rm/giphy.gif",
+    "https://media.giphy.com/media/3o7abAHdYwZdO3Q8qk/giphy.gif",
+    "https://media.giphy.com/media/3o85xnoIXebk3xYx4I/giphy.gif",
+    "https://media.giphy.com/media/l0MYt5jH6gkTWm8qo/giphy.gif",
+    "https://media.giphy.com/media/3o7TKo5M8RxWpU8G1i/giphy.gif"
+]
+
+gifs_matar = [
+    "https://media.giphy.com/media/3o6Mbj2w67HnPQcQoM/giphy.gif",
+    "https://media.giphy.com/media/l0MYEqEzwMWFCg8rm/giphy.gif",
+    "https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif",
+    "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif"
+]
+
+# ===== NOVOS COMANDOS DE INTERAÇÃO COM GIF =====
+
+@bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
+async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se abraçar! 🥲")
+        return
+    
+    gif = random.choice(gifs_abraco)
+    
+    embed = discord.Embed(
+        title="🤗 ABRAÇO!",
+        description=f"{interaction.user.mention} abraçou {membro.mention}!",
+        color=discord.Color.from_str("#FF69B4")
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="beijo_gif", description="💋 Beijar alguém com GIF")
+async def beijo_gif(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se beijar! 🥲")
+        return
+    
+    gif = random.choice(gifs_beijo)
+    
+    embed = discord.Embed(
+        title="💋 BEIJO!",
+        description=f"{interaction.user.mention} beijou {membro.mention}!",
+        color=discord.Color.red()
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="carinho_gif", description="🥰 Fazer carinho com GIF")
+async def carinho_gif(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode fazer carinho em si mesmo! 🥲")
+        return
+    
+    gif = random.choice(gifs_carinho)
+    
+    embed = discord.Embed(
+        title="🥰 CARINHO!",
+        description=f"{interaction.user.mention} fez carinho em {membro.mention}!",
+        color=discord.Color.purple()
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="cafune_gif", description="😴 Fazer cafuné com GIF")
+async def cafune_gif(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode fazer cafuné em si mesmo! 🥲")
+        return
+    
+    gif = random.choice(gifs_carinho)
+    
+    embed = discord.Embed(
+        title="😴 CAFUNÉ!",
+        description=f"{interaction.user.mention} fez cafuné em {membro.mention}!",
+        color=discord.Color.teal()
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="tapa", description="👋 Dar um tapa em alguém com GIF")
+async def tapa(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se bater! 🥲")
+        return
+    
+    gif = random.choice(gifs_tapa)
+    
+    embed = discord.Embed(
+        title="👋 TAPA!",
+        description=f"{interaction.user.mention} deu um tapa em {membro.mention}!",
+        color=discord.Color.orange()
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="festa", description="🎉 Fazer uma festa com GIF")
+async def festa(interaction: discord.Interaction, membro: Optional[discord.Member] = None):
+    gif = random.choice(gifs_festa)
+    
+    if membro:
+        embed = discord.Embed(
+            title="🎉 FESTA!",
+            description=f"{interaction.user.mention} fez uma festa com {membro.mention}!",
+            color=discord.Color.gold()
+        )
+    else:
+        embed = discord.Embed(
+            title="🎉 FESTA!",
+            description=f"{interaction.user.mention} fez uma festa!",
+            color=discord.Color.gold()
+        )
+    
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="matar", description="💀 Matar alguém (brincadeira) com GIF")
+async def matar(interaction: discord.Interaction, membro: discord.Member):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se matar! 😱")
+        return
+    
+    gif = random.choice(gifs_matar)
+    
+    embed = discord.Embed(
+        title="💀 MORTE!",
+        description=f"{interaction.user.mention} matou {membro.mention}! (brincadeira 😅)",
+        color=discord.Color.dark_red()
+    )
+    embed.set_image(url=gif)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="chifre", description="🦌 Dar chifre em alguém")
+async def chifre(interaction: discord.Interaction, membro: discord.Member):
+    embed = discord.Embed(
+        title="🦌 CHIFRE!",
+        description=f"{interaction.user.mention} deu chifre em {membro.mention}!",
+        color=discord.Color.green()
+    )
+    embed.set_image(url="https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif")
+    
+    await interaction.response.send_message(embed=embed)
+
+# ==================== OUTRAS FUNÇÕES LEGAIS ====================
+
+@bot.tree.command(name="moeda", description="🪙 Jogar uma moeda")
+async def moeda(interaction: discord.Interaction):
+    resultado = random.choice(["CARA", "COROA"])
+    await interaction.response.send_message(f"🪙 A moeda caiu: **{resultado}**!")
+
+@bot.tree.command(name="rps", description="🗿 Pedra, Papel ou Tesoura contra o bot")
+@app_commands.describe(escolha="Sua escolha")
+async def rps(interaction: discord.Interaction, escolha: str):
+    escolhas = ["pedra", "papel", "tesoura"]
+    if escolha.lower() not in escolhas:
+        await interaction.response.send_message("❌ Escolha: pedra, papel ou tesoura!")
+        return
+    
+    bot_choice = random.choice(escolhas)
+    
+    if escolha.lower() == bot_choice:
+        resultado = "Empate!"
+        cor = discord.Color.blue()
+    elif (escolha.lower() == "pedra" and bot_choice == "tesoura") or \
+         (escolha.lower() == "papel" and bot_choice == "pedra") or \
+         (escolha.lower() == "tesoura" and bot_choice == "papel"):
+        resultado = "Você ganhou!"
+        cor = discord.Color.green()
+    else:
+        resultado = "Você perdeu!"
+        cor = discord.Color.red()
+    
+    emojis = {"pedra": "🗿", "papel": "📄", "tesoura": "✂️"}
+    
+    embed = discord.Embed(
+        title="🗿📄✂️ Jokenpo",
+        description=f"Você: {emojis[escolha.lower()]}\nBot: {emojis[bot_choice]}",
+        color=cor
+    )
+    embed.add_field(name="Resultado", value=resultado)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="dado_rpg", description="🎲 Rolar dados de RPG")
+@app_commands.describe(
+    quantidade="Quantidade de dados (ex: 2)",
+    faces="Número de faces (ex: 20)"
+)
+async def dado_rpg(interaction: discord.Interaction, quantidade: int = 1, faces: int = 20):
+    if quantidade < 1 or quantidade > 10:
+        await interaction.response.send_message("❌ Quantidade deve ser entre 1 e 10!")
+        return
+    
+    if faces not in [4, 6, 8, 10, 12, 20, 100]:
+        await interaction.response.send_message("❌ Faces válidas: 4, 6, 8, 10, 12, 20, 100")
+        return
+    
+    resultados = [random.randint(1, faces) for _ in range(quantidade)]
+    total = sum(resultados)
+    
+    embed = discord.Embed(
+        title="🎲 Dados de RPG",
+        description=f"**{quantidade}d{faces}**",
+        color=discord.Color.purple()
+    )
+    
+    resultados_str = " + ".join(str(r) for r in resultados)
+    embed.add_field(name="Resultados", value=resultados_str, inline=False)
+    embed.add_field(name="Total", value=f"**{total}**", inline=True)
+    
+    if quantidade > 1:
+        media = total / quantidade
+        embed.add_field(name="Média", value=f"{media:.1f}", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="sortear", description="🎁 Sortear um membro do servidor")
+@app_commands.describe(cargo="Cargo específico para sortear (opcional)")
+async def sortear(interaction: discord.Interaction, cargo: Optional[discord.Role] = None):
+    if cargo:
+        membros = [m for m in cargo.members if not m.bot]
+        if not membros:
+            await interaction.response.send_message(f"❌ Não há membros no cargo {cargo.mention}!")
+            return
+        sorteado = random.choice(membros)
+        await interaction.response.send_message(f"🎁 O sorteado do cargo {cargo.mention} é: {sorteado.mention}! 🎉")
+    else:
+        membros = [m for m in interaction.guild.members if not m.bot]
+        if not membros:
+            await interaction.response.send_message("❌ Não há membros no servidor!")
+            return
+        sorteado = random.choice(membros)
+        await interaction.response.send_message(f"🎁 O sorteado do servidor é: {sorteado.mention}! 🎉")
+
+@bot.tree.command(name="enquete", description="📊 Criar uma enquete rápida")
+@app_commands.describe(
+    pergunta="A pergunta da enquete",
+    opcao1="Primeira opção",
+    opcao2="Segunda opção",
+    opcao3="Terceira opção (opcional)",
+    opcao4="Quarta opção (opcional)"
+)
+async def enquete(
+    interaction: discord.Interaction,
+    pergunta: str,
+    opcao1: str,
+    opcao2: str,
+    opcao3: str = None,
+    opcao4: str = None
+):
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+    opcoes = [opcao1, opcao2]
+    
+    if opcao3:
+        opcoes.append(opcao3)
+    if opcao4:
+        opcoes.append(opcao4)
+    
+    descricao = ""
+    for i, opcao in enumerate(opcoes):
+        descricao += f"{emojis[i]} {opcao}\n"
+    
+    embed = discord.Embed(
+        title=f"📊 {pergunta}",
+        description=descricao,
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"Enquete criada por {interaction.user.name}")
+    embed.timestamp = datetime.now()
+    
+    await interaction.response.send_message(embed=embed)
+    message = await interaction.original_response()
+    
+    for i in range(len(opcoes)):
+        await message.add_reaction(emojis[i])
+
+# ==================== COMANDO DE AJUDA ATUALIZADO ====================
 
 @bot.tree.command(name="ajuda", description="📚 Todos os comandos")
 async def ajuda(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📚 Comandos do Bot Fort",
-        description="**Sistema Completo - 50+ Comandos!**",
+        description="**Sistema Completo - 70+ COMANDOS!**",
         color=discord.Color.blue()
     )
     
     embed.add_field(
         name="📢 **CHAMADAS**",
-        value="`/chamada` - Criar chamada\n"
+        value="`/chamada` - Chamada normal\n"
+              "`/chamada_tempo` - Chamada com tempo limite\n"
               "`/chamada_info` - Ver informações\n"
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n",
@@ -1625,6 +2163,29 @@ async def ajuda(interaction: discord.Interaction):
     )
     
     embed.add_field(
+        name="🎭 **INTERAÇÕES COM GIF**",
+        value="`/abraco_gif` - Abraçar\n"
+              "`/beijo_gif` - Beijar\n"
+              "`/carinho_gif` - Carinho\n"
+              "`/cafune_gif` - Cafuné\n"
+              "`/tapa` - Dar tapa\n"
+              "`/festa` - Fazer festa\n"
+              "`/matar` - Matar (brincadeira)\n"
+              "`/chifre` - Dar chifre\n",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎮 **NOVOS JOGOS**",
+        value="`/moeda` - Cara ou coroa\n"
+              "`/rps` - Pedra papel tesoura\n"
+              "`/dado_rpg` - Dados de RPG\n"
+              "`/sortear` - Sortear membro\n"
+              "`/enquete` - Criar enquete\n",
+        inline=True
+    )
+    
+    embed.add_field(
         name="🤖 **BÁSICOS**",
         value="`/ping` - Latência\n"
               "`/userinfo` - Info usuário\n"
@@ -1641,14 +2202,11 @@ async def ajuda(interaction: discord.Interaction):
               "`/piada` - Piadas\n"
               "`/conselho` - Conselhos\n"
               "`/fato` - Fatos\n"
-              "`/cafune` - Carinho\n"
-              "`/beijo` - Beijar\n"
-              "`/abraço` - Abraçar\n"
               "`/baitola` - 🏳️‍🌈\n",
         inline=True
     )
     
-    embed.set_footer(text="Total: 50+ comandos! Use / antes de cada comando")
+    embed.set_footer(text="Total: 70+ comandos! Use / antes de cada comando")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     await interaction.response.send_message(embed=embed)
@@ -1695,4 +2253,19 @@ def run_bot():
         print(f"❌ Erro fatal: {e}")
 
 if __name__ == "__main__":
+    print("="*60)
+    print("🚀 INICIANDO BOT FORT - VERSÃO 70+ COMANDOS")
+    print("="*60)
+    print("\n📢 SISTEMAS CARREGADOS:")
+    print("✅ Sistema de Chamadas (com tempo limite)")
+    print("✅ Sistema de Ship (likes, ranking)")
+    print("✅ Sistema de Casamento (com economia)")
+    print("✅ Sistema de Presentes e Signos")
+    print("✅ Sistema de Economia (daily, slots)")
+    print("✅ Comandos com GIF (abraço, beijo, etc)")
+    print("✅ Novos Jogos (dado_rpg, enquete, sorteio)")
+    print("✅ 70+ COMANDOS NO TOTAL!")
+    print("="*60)
+    
+    # Executa o bot
     run_bot()
