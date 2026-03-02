@@ -19,9 +19,10 @@ import traceback
 # NÃO COLOQUE O TOKEN AQUI! Ele vai ser pego do arquivo .env ou variável de ambiente
 DISCORD_TOKEN = 'SEU_TOKEN_AQUI'  # DEIXA ASSIM MEMO
 
-# ===== ADICIONAR ESTES IMPORTS NO TOPO =====
+# ===== IMPORTS DO SERVIDOR WEB =====
 from flask import Flask, jsonify
-from threading import Thread
+import threading
+import multiprocessing
 
 # Configurar encoding e logging
 sys.stdout.reconfigure(encoding='utf-8')
@@ -31,8 +32,7 @@ logging.basicConfig(level=logging.INFO)
 PREFIX = '!'
 API_NINJAS_KEY = 'SUA_API_KEY'  # Opcional: para comandos de IA
 
-# ===== ADICIONAR ESTE CÓDIGO DO SERVIDOR WEB =====
-# Servidor web para o Render/VertraCloud free tier
+# ===== SERVIDOR WEB CORRIGIDO =====
 app = Flask(__name__)
 
 @app.route('/')
@@ -53,14 +53,14 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - OBRIGATÓRIO para o free tier"""
+    """Inicia o servidor web - versão corrigida sem conflito"""
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    # Desativa o modo debug e reloader pra não conflitar
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
-    """Mantém o bot vivo no free tier"""
-    server = Thread(target=run_webserver)
-    server.daemon = True
+    """Mantém o bot vivo - com thread separada"""
+    server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
     print(f"✅ Servidor web rodando na porta {os.environ.get('PORT', 10000)}")
 
@@ -1653,7 +1653,7 @@ async def ajuda(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE ====================
+# ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE - CORRIGIDO ====================
 async def main():
     """Função principal assíncrona para iniciar o bot"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
@@ -1670,95 +1670,33 @@ async def main():
         print("❌ ERRO CRÍTICO: Token não encontrado!")
         print("👉 OPÇÃO 1: Crie um arquivo .env com DISCORD_TOKEN=seu_token")
         print("👉 OPÇÃO 2: No VertraCloud, adicione DISCORD_TOKEN nas variáveis de ambiente")
-        print("\n📌 Como obter o token:")
-        print("1. Acesse https://discord.com/developers/applications")
-        print("2. Crie ou selecione seu bot")
-        print("3. Vá em 'Bot' no menu lateral")
-        print("4. Clique em 'Reset Token' ou 'Copy'")
         return
     
     print(f"🔵 Token encontrado! Primeiros 5 caracteres: {token[:5]}...")
     print(f"🔵 Tamanho do token: {len(token)} caracteres")
     
-    tentativas = 0
-    max_tentativas = 5
-    tempo_base = 5
-    
-    while tentativas < max_tentativas:
-        try:
-            tentativas += 1
-            print(f"🔄 Tentativa {tentativas} de conectar...")
-            
-            # Timeout de 30 segundos para a conexão
-            print("⏱️ Aguardando até 30 segundos pela conexão...")
-            
-            async with bot:
-                # Adiciona timeout para não travar
-                await asyncio.wait_for(bot.start(token), timeout=30.0)
-            
-            # Se chegou aqui, conectou com sucesso
-            print("✅✅✅ BOT CONECTADO COM SUCESSO! ✅✅✅")
-            break
-            
-        except asyncio.TimeoutError:
-            print(f"⏰ TIMEOUT: Tentativa {tentativas} demorou mais de 30 segundos")
-            if tentativas < max_tentativas:
-                print(f"🔄 Tentando novamente em {tempo_base} segundos...")
-                await asyncio.sleep(tempo_base)
-                tempo_base = min(tempo_base * 1.5, 30)
-            else:
-                print("❌ Número máximo de tentativas atingido devido a timeout.")
-                
-        except discord.LoginFailure:
-            print("❌ TOKEN INVÁLIDO! Verifique se o token está correto.")
-            print("👉 Vá no Discord Developer Portal e gere um novo token")
-            break
-            
-        except discord.HTTPException as e:
-            if e.status == 429:  # Rate limit
-                retry_after = int(e.response.headers.get('Retry-After', tempo_base))
-                print(f"⚠️ Rate limit! Discord pede para aguardar {retry_after} segundos...")
-                
-                if tentativas < max_tentativas:
-                    print(f"⏰ Aguardando {retry_after}s...")
-                    await asyncio.sleep(retry_after)
-                else:
-                    print("❌ Máximo de tentativas atingido devido a rate limit.")
-                    break
-            else:
-                print(f"❌ Erro HTTP {e.status}: {e}")
-                if tentativas < max_tentativas:
-                    print(f"⏰ Tentando novamente em {tempo_base} segundos...")
-                    await asyncio.sleep(tempo_base)
-                else:
-                    print("❌ Máximo de tentativas atingido.")
-                    break
-                    
-        except asyncio.CancelledError:
-            print("👋 Bot desligado manualmente")
-            break
-            
-        except Exception as e:
-            print(f"❌ Erro inesperado: {type(e).__name__}")
-            print(f"❌ Detalhes: {str(e)}")
-            traceback.print_exc()
-            
-            if tentativas < max_tentativas:
-                print(f"⏰ Tentando novamente em {tempo_base} segundos... (Tentativa {tentativas}/{max_tentativas})")
-                await asyncio.sleep(tempo_base)
-                tempo_base = min(tempo_base * 1.5, 30)
-            else:
-                print("❌ Número máximo de tentativas atingido. Desligando...")
-                break
+    # Tenta conectar sem timeout infinito
+    try:
+        print("🔄 Conectando ao Discord...")
+        async with bot:
+            await bot.start(token)
+    except discord.LoginFailure:
+        print("❌ TOKEN INVÁLIDO! Verifique se o token está correto.")
+    except Exception as e:
+        print(f"❌ Erro: {e}")
+        traceback.print_exc()
 
 def run_bot():
     """Função síncrona para executar o bot"""
     print("🟢 INICIANDO FUNÇÃO RUN_BOT")
     try:
-        # INICIAR SERVIDOR WEB (OBRIGATÓRIO PARA FREE TIER)
+        # INICIAR SERVIDOR WEB PRIMEIRO
         print("🟢 Iniciando servidor web...")
         keep_alive()
         print("✅ Servidor web ativo!")
+        
+        # Pequena pausa pro servidor web estabilizar
+        time.sleep(2)
         
         print("🟢 Iniciando bot principal...")
         asyncio.run(main())
@@ -1766,26 +1704,20 @@ def run_bot():
     except KeyboardInterrupt:
         print("👋 Bot desligado manualmente")
     except Exception as e:
-        print(f"❌ Erro fatal em run_bot: {type(e).__name__}")
-        print(f"❌ Detalhes: {str(e)}")
+        print(f"❌ Erro fatal: {e}")
         traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT")
+    print("🚀 INICIANDO BOT FORT - VERSÃO CORRIGIDA")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas (com lista de presença)")
-    print("✅ Sistema de Ship (likes, ranking, histórico)")
-    print("✅ Sistema de Casamento (com economia)")
-    print("✅ Sistema de Presentes e Signos")
-    print("✅ Sistema de Economia (daily, slots)")
-    print("✅ Comandos de Diversão e Básicos")
-    print("✅ Banco de Dados SQLite (dados permanentes)")
-    print("\n📊 TOTAL: 50+ COMANDOS!")
-    print("="*60)
-    print(f"🔧 Modo: {'PRODUÇÃO' if os.environ.get('RENDER') or os.environ.get('VERTRA') else 'DESENVOLVIMENTO (Local)'}")
+    print("✅ Sistema de Chamadas")
+    print("✅ Sistema de Ship")
+    print("✅ Sistema de Casamento")
+    print("✅ Sistema de Economia")
+    print("✅ 50+ COMANDOS!")
     print("="*60)
     
     # Executa o bot
