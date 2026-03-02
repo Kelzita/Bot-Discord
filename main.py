@@ -16,9 +16,8 @@ import logging
 import traceback
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# INSTRUÇÕES: Substitua 'SEU_TOKEN_AQUI' pelo token do seu bot do Discord
-# Para obter o token: https://discord.com/developers/applications
-DISCORD_TOKEN = 'TOKEN_DISCORD'  # <--- COLE SEU TOKEN AQUI
+# NÃO COLOQUE O TOKEN AQUI! Ele vai ser pego do arquivo .env ou variável de ambiente
+DISCORD_TOKEN = 'SEU_TOKEN_AQUI'  # DEIXA ASSIM MEMO
 
 # ===== ADICIONAR ESTES IMPORTS NO TOPO =====
 from flask import Flask, jsonify
@@ -33,7 +32,7 @@ PREFIX = '!'
 API_NINJAS_KEY = 'SUA_API_KEY'  # Opcional: para comandos de IA
 
 # ===== ADICIONAR ESTE CÓDIGO DO SERVIDOR WEB =====
-# Servidor web para o Render free tier
+# Servidor web para o Render/VertraCloud free tier
 app = Flask(__name__)
 
 @app.route('/')
@@ -54,7 +53,7 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - OBRIGATÓRIO para o free tier do Render"""
+    """Inicia o servidor web - OBRIGATÓRIO para o free tier"""
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
@@ -1660,7 +1659,7 @@ async def main():
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
     # ===== PRIORIDADE 1: USAR TOKEN DO ARQUIVO =====
-    token = TOKEN_DO_BOT
+    token = DISCORD_TOKEN
     
     # ===== PRIORIDADE 2: SE NÃO TIVER NO ARQUIVO, TENTA VARIÁVEL DE AMBIENTE =====
     if token == 'SEU_TOKEN_AQUI':
@@ -1669,8 +1668,8 @@ async def main():
     
     if not token:
         print("❌ ERRO CRÍTICO: Token não encontrado!")
-        print("👉 OPÇÃO 1: Edite o arquivo e substitua 'SEU_TOKEN_AQUI' pelo seu token")
-        print("👉 OPÇÃO 2: No Render, vá em Environment e adicione DISCORD_TOKEN")
+        print("👉 OPÇÃO 1: Crie um arquivo .env com DISCORD_TOKEN=seu_token")
+        print("👉 OPÇÃO 2: No VertraCloud, adicione DISCORD_TOKEN nas variáveis de ambiente")
         print("\n📌 Como obter o token:")
         print("1. Acesse https://discord.com/developers/applications")
         print("2. Crie ou selecione seu bot")
@@ -1786,11 +1785,8 @@ if __name__ == "__main__":
     print("✅ Banco de Dados SQLite (dados permanentes)")
     print("\n📊 TOTAL: 50+ COMANDOS!")
     print("="*60)
-    print(f"🔧 Modo: {'PRODUÇÃO (Render)' if os.environ.get('RENDER') else 'DESENVOLVIMENTO (Local)'}")
+    print(f"🔧 Modo: {'PRODUÇÃO' if os.environ.get('RENDER') or os.environ.get('VERTRA') else 'DESENVOLVIMENTO (Local)'}")
     print("="*60)
     
     # Executa o bot
     run_bot()
-
-
-
