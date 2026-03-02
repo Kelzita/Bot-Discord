@@ -1653,72 +1653,46 @@ async def ajuda(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== INICIAR BOT COM RECONEXÃO INTELIGENTE - CORRIGIDO ====================
+# ==================== INICIAR BOT SEM LOOP IDIOTA ====================
 async def main():
-    """Função principal assíncrona para iniciar o bot"""
+    """Função principal - SEM LOOP DE RECONEXÃO"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
-    # ===== PRIORIDADE 1: USAR TOKEN DO ARQUIVO =====
+    # Pega o token
     token = DISCORD_TOKEN
-    
-    # ===== PRIORIDADE 2: SE NÃO TIVER NO ARQUIVO, TENTA VARIÁVEL DE AMBIENTE =====
     if token == 'SEU_TOKEN_AQUI':
         print("⚠️ Token não configurado no arquivo! Tentando variável de ambiente...")
         token = os.environ.get('DISCORD_TOKEN')
     
     if not token:
         print("❌ ERRO CRÍTICO: Token não encontrado!")
-        print("👉 OPÇÃO 1: Crie um arquivo .env com DISCORD_TOKEN=seu_token")
-        print("👉 OPÇÃO 2: No VertraCloud, adicione DISCORD_TOKEN nas variáveis de ambiente")
         return
     
-    print(f"🔵 Token encontrado! Primeiros 5 caracteres: {token[:5]}...")
-    print(f"🔵 Tamanho do token: {len(token)} caracteres")
+    print(f"🔵 Token encontrado! Conectando...")
     
-    # Tenta conectar sem timeout infinito
     try:
-        print("🔄 Conectando ao Discord...")
+        # CONECTA UMA ÚNICA VEZ - SEM LOOP, SEM TIMEOUT
         async with bot:
             await bot.start(token)
-    except discord.LoginFailure:
-        print("❌ TOKEN INVÁLIDO! Verifique se o token está correto.")
     except Exception as e:
         print(f"❌ Erro: {e}")
-        traceback.print_exc()
 
 def run_bot():
-    """Função síncrona para executar o bot"""
-    print("🟢 INICIANDO FUNÇÃO RUN_BOT")
+    print("🟢 INICIANDO BOT")
     try:
-        # INICIAR SERVIDOR WEB PRIMEIRO
-        print("🟢 Iniciando servidor web...")
+        # Servidor web
         keep_alive()
-        print("✅ Servidor web ativo!")
         
-        # Pequena pausa pro servidor web estabilizar
+        # Dá tempo pro servidor web iniciar
         time.sleep(2)
         
-        print("🟢 Iniciando bot principal...")
+        # Inicia o bot
         asyncio.run(main())
         
     except KeyboardInterrupt:
-        print("👋 Bot desligado manualmente")
+        print("👋 Desligando")
     except Exception as e:
         print(f"❌ Erro fatal: {e}")
-        traceback.print_exc()
-        sys.exit(1)
 
 if __name__ == "__main__":
-    print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO CORRIGIDA")
-    print("="*60)
-    print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas")
-    print("✅ Sistema de Ship")
-    print("✅ Sistema de Casamento")
-    print("✅ Sistema de Economia")
-    print("✅ 50+ COMANDOS!")
-    print("="*60)
-    
-    # Executa o bot
     run_bot()
