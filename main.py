@@ -16,13 +16,12 @@ import logging
 import traceback
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# NÃO COLOQUE O TOKEN AQUI! Ele vai ser pego do arquivo .env ou variável de ambiente
-DISCORD_TOKEN = 'SEU_TOKEN_AQUI'  # DEIXA ASSIM MEMO
+# Pega o token das variáveis de ambiente do Vercel
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # ===== IMPORTS DO SERVIDOR WEB =====
 from flask import Flask, jsonify
 import threading
-import multiprocessing
 
 # Configurar encoding e logging
 sys.stdout.reconfigure(encoding='utf-8')
@@ -32,7 +31,7 @@ logging.basicConfig(level=logging.INFO)
 PREFIX = '!'
 API_NINJAS_KEY = 'SUA_API_KEY'  # Opcional: para comandos de IA
 
-# ===== SERVIDOR WEB CORRIGIDO =====
+# ===== SERVIDOR WEB PARA VERCEl =====
 app = Flask(__name__)
 
 @app.route('/')
@@ -53,16 +52,15 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - versão corrigida sem conflito"""
-    port = int(os.environ.get('PORT', 10000))
-    # Desativa o modo debug e reloader pra não conflitar
+    """Inicia o servidor web - adaptado para Vercel"""
+    port = int(os.environ.get('PORT', 8080))  # Vercel usa porta 8080 geralmente
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
-    """Mantém o bot vivo - com thread separada"""
+    """Mantém o bot vivo"""
     server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
-    print(f"✅ Servidor web rodando na porta {os.environ.get('PORT', 10000)}")
+    print(f"✅ Servidor web rodando na porta {os.environ.get('PORT', 8080)}")
 
 class Fort(discord.Client):
     def __init__(self):
@@ -2137,14 +2135,12 @@ async def main():
     """Função principal"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
-    # Pega o token
-    token = DISCORD_TOKEN
-    if token == 'SEU_TOKEN_AQUI':
-        print("⚠️ Token não configurado no arquivo! Tentando variável de ambiente...")
-        token = os.environ.get('DISCORD_TOKEN')
+    # Pega o token das variáveis de ambiente
+    token = os.environ.get('DISCORD_TOKEN')
     
     if not token:
-        print("❌ ERRO CRÍTICO: Token não encontrado!")
+        print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
+        print("📌 Certifique-se de que a variável DISCORD_TOKEN está configurada no Vercel")
         return
     
     print(f"🔵 Token encontrado! Conectando...")
