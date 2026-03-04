@@ -48,15 +48,17 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web"""
-    port = int(os.environ.get('PORT', 8080))
+    """Inicia o servidor web - usa a porta do ambiente"""
+    # No Vercel, a porta é fornecida pela variável PORT
+    port = int(os.environ.get('PORT', 8080))  # 8080 é a padrão do Vercel
+    print(f"📡 Iniciando servidor web na porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
     """Mantém o bot vivo"""
     server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
-    print(f"✅ Servidor web rodando na porta {os.environ.get('PORT', 8080)}")
+    print(f"✅ Servidor web configurado")
 
 class Fort(discord.Client):
     def __init__(self):
