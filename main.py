@@ -16,7 +16,7 @@ import logging
 import traceback
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# Pega o token das variáveis de ambiente do Vercel
+# Pega o token das variáveis de ambiente
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # ===== IMPORTS DO SERVIDOR WEB =====
@@ -27,11 +27,7 @@ import threading
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO)
 
-# Configurações
-PREFIX = '!'
-API_NINJAS_KEY = 'SUA_API_KEY'  # Opcional: para comandos de IA
-
-# ===== SERVIDOR WEB PARA VERCEl =====
+# ===== SERVIDOR WEB =====
 app = Flask(__name__)
 
 @app.route('/')
@@ -52,8 +48,8 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - adaptado para Vercel"""
-    port = int(os.environ.get('PORT', 8080))  # Vercel usa porta 8080 geralmente
+    """Inicia o servidor web"""
+    port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
@@ -94,25 +90,17 @@ class Fort(discord.Client):
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
-        # Cria tabela para economia (saldo dos usuários)
         c.execute('''CREATE TABLE IF NOT EXISTS economia
                      (user_id TEXT PRIMARY KEY, saldo INTEGER)''')
-        
-        # Cria tabela para cooldowns diários
         c.execute('''CREATE TABLE IF NOT EXISTS daily_cooldowns
                      (user_id TEXT PRIMARY KEY, data TEXT)''')
-        
-        # Cria tabela para cooldowns de divórcio
         c.execute('''CREATE TABLE IF NOT EXISTS divorce_cooldowns
                      (user_id TEXT PRIMARY KEY, data TEXT)''')
-        
-        # Cria tabela genérica para todos os outros dados JSON
         c.execute('''CREATE TABLE IF NOT EXISTS dados_json
                      (tipo TEXT PRIMARY KEY, dados TEXT)''')
         
         conn.commit()
         conn.close()
-        
         print("✅ Banco de dados SQLite inicializado!")
     
     def load_data(self):
@@ -120,25 +108,17 @@ class Fort(discord.Client):
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
-        # Carrega economia (saldo dos usuários)
         c.execute('SELECT user_id, saldo FROM economia')
-        self.user_balances = {}
-        for user_id, saldo in c.fetchall():
-            self.user_balances[user_id] = saldo
+        self.user_balances = {user_id: saldo for user_id, saldo in c.fetchall()}
         
-        # Carrega daily cooldowns
         c.execute('SELECT user_id, data FROM daily_cooldowns')
-        self.daily_cooldowns = {}
-        for user_id, data in c.fetchall():
-            self.daily_cooldowns[user_id] = data
+        self.daily_cooldowns = {user_id: data for user_id, data in c.fetchall()}
         
-        # Carrega divorce cooldowns
         c.execute('SELECT user_id, data FROM divorce_cooldowns')
         self.divorce_cooldowns = {}
         for user_id, data in c.fetchall():
             self.divorce_cooldowns[user_id] = datetime.fromisoformat(data) if data else None
         
-        # Carrega todos os outros dados da tabela genérica
         c.execute('SELECT tipo, dados FROM dados_json')
         for tipo, dados_json in c.fetchall():
             dados = json.loads(dados_json)
@@ -158,61 +138,51 @@ class Fort(discord.Client):
                 self.call_participants = dados
         
         conn.close()
-        
-        # Tenta importar dados dos arquivos JSON antigos se o banco estiver vazio
         self.import_from_json_if_empty()
     
     def import_from_json_if_empty(self):
-        """Importa dados dos arquivos JSON antigos se o banco estiver vazio"""
-        if not self.user_balances:  # Se não há dados no banco
+        if not self.user_balances:
             try:
-                # Tenta carregar dos JSONs antigos
-                with open('economy.json', 'r', encoding='utf-8') as f:
-                    self.user_balances = json.load(f)
-                with open('inventory.json', 'r', encoding='utf-8') as f:
-                    self.user_inventory = json.load(f)
-                with open('ships.json', 'r', encoding='utf-8') as f:
-                    self.ship_data = json.load(f)
-                with open('marriages.json', 'r', encoding='utf-8') as f:
-                    self.marriage_data = json.load(f)
-                with open('anniversary.json', 'r', encoding='utf-8') as f:
-                    self.anniversary_data = json.load(f)
-                with open('ship_history.json', 'r', encoding='utf-8') as f:
-                    self.ship_history = json.load(f)
-                with open('calls.json', 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.call_data = data.get('calls', {})
-                    self.call_participants = data.get('participants', {})
-                
-                print("✅ Dados importados dos arquivos JSON antigos!")
-                self.save_data()  # Salva no SQLite imediatamente
-            except FileNotFoundError:
-                print("ℹ️ Nenhum arquivo JSON antigo encontrado. Começando do zero.")
+                arquivos = ['economy.json', 'inventory.json', 'ships.json', 'marriages.json', 
+                           'anniversary.json', 'ship_history.json', 'calls.json']
+                for arquivo in arquivos:
+                    if os.path.exists(arquivo):
+                        with open(arquivo, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            if arquivo == 'economy.json':
+                                self.user_balances = data
+                            elif arquivo == 'inventory.json':
+                                self.user_inventory = data
+                            elif arquivo == 'ships.json':
+                                self.ship_data = data
+                            elif arquivo == 'marriages.json':
+                                self.marriage_data = data
+                            elif arquivo == 'anniversary.json':
+                                self.anniversary_data = data
+                            elif arquivo == 'ship_history.json':
+                                self.ship_history = data
+                            elif arquivo == 'calls.json':
+                                self.call_data = data.get('calls', {})
+                                self.call_participants = data.get('participants', {})
+                print("✅ Dados importados dos JSONs!")
+                self.save_data()
             except Exception as e:
                 print(f"⚠️ Erro ao importar JSONs: {e}")
     
     def save_data(self):
-        """Salva dados no SQLite"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
-        # Salva economia (linha por linha)
         for user_id, saldo in self.user_balances.items():
-            c.execute('''INSERT OR REPLACE INTO economia (user_id, saldo)
-                         VALUES (?, ?)''', (user_id, saldo))
+            c.execute('INSERT OR REPLACE INTO economia VALUES (?, ?)', (user_id, saldo))
         
-        # Salva daily cooldowns
         for user_id, data in self.daily_cooldowns.items():
-            c.execute('''INSERT OR REPLACE INTO daily_cooldowns (user_id, data)
-                         VALUES (?, ?)''', (user_id, data))
+            c.execute('INSERT OR REPLACE INTO daily_cooldowns VALUES (?, ?)', (user_id, data))
         
-        # Salva divorce cooldowns
         for user_id, data in self.divorce_cooldowns.items():
             data_str = data.isoformat() if data else None
-            c.execute('''INSERT OR REPLACE INTO divorce_cooldowns (user_id, data)
-                         VALUES (?, ?)''', (user_id, data_str))
+            c.execute('INSERT OR REPLACE INTO divorce_cooldowns VALUES (?, ?)', (user_id, data_str))
         
-        # Salva todos os outros dados como JSON
         dados_para_salvar = [
             ('inventory', self.user_inventory),
             ('ships', self.ship_data),
@@ -224,8 +194,8 @@ class Fort(discord.Client):
         ]
         
         for tipo, dados in dados_para_salvar:
-            c.execute('''INSERT OR REPLACE INTO dados_json (tipo, dados)
-                         VALUES (?, ?)''', (tipo, json.dumps(dados, ensure_ascii=False)))
+            c.execute('INSERT OR REPLACE INTO dados_json VALUES (?, ?)', 
+                     (tipo, json.dumps(dados, ensure_ascii=False)))
         
         conn.commit()
         conn.close()
@@ -238,7 +208,7 @@ class Fort(discord.Client):
         print(f"✅ Bot {self.user} ligado com sucesso!")
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
-        print(f"📢 Sistema de Chamadas: ATIVO (vence meia-noite automático)")
+        print(f"📢 Sistema de Chamadas: ATIVO (timing opcional)")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
@@ -249,18 +219,28 @@ class Fort(discord.Client):
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS COM TIMING AUTOMÁTICO ====================
+# ==================== SISTEMA DE CHAMADAS COM TIMING INTELIGENTE ====================
 
-def calcular_meia_noite():
-    """Calcula o timestamp da meia-noite de hoje"""
+def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
+    """
+    Calcula o tempo de expiração da chamada:
+    - Se horas_limite for fornecido: expira após X horas
+    - Se não for fornecido: expira à meia-noite
+    """
     agora = datetime.now()
-    meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
     
-    # Se já passou da meia-noite de hoje, vai para amanhã
-    if agora > meia_noite:
-        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-    
-    return meia_noite
+    if horas_limite is not None and horas_limite > 0:
+        # Expira após X horas
+        return agora + timedelta(hours=horas_limite)
+    else:
+        # Expira à meia-noite de hoje
+        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
+        
+        # Se já passou da meia-noite de hoje, vai para amanhã
+        if agora > meia_noite:
+            meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
+        
+        return meia_noite
 
 class CallButton(Button):
     def __init__(self, call_id: str, emoji: str, expira_em: datetime):
@@ -274,9 +254,8 @@ class CallButton(Button):
         self.expira_em = expira_em
     
     async def callback(self, interaction: discord.Interaction):
-        # Verifica se expirou
         if datetime.now() > self.expira_em:
-            await interaction.response.send_message("⏰ **Esta chamada EXPIROU!** O tempo de confirmação acabou.", ephemeral=True)
+            await interaction.response.send_message("⏰ **Esta chamada EXPIROU!**", ephemeral=True)
             return
             
         try:
@@ -284,7 +263,7 @@ class CallButton(Button):
             call_id = self.call_id
             
             if call_id not in bot.call_data:
-                await interaction.response.send_message("❌ Esta chamada não existe mais!", ephemeral=True)
+                await interaction.response.send_message("❌ Chamada não existe!", ephemeral=True)
                 return
             
             call = bot.call_data[call_id]
@@ -293,7 +272,7 @@ class CallButton(Button):
                 bot.call_participants[call_id] = []
             
             if user_id in bot.call_participants[call_id]:
-                await interaction.response.send_message("❌ Você já confirmou presença!", ephemeral=True)
+                await interaction.response.send_message("❌ Você já confirmou!", ephemeral=True)
                 return
             
             bot.call_participants[call_id].append(user_id)
@@ -305,7 +284,6 @@ class CallButton(Button):
                 if channel:
                     message = await channel.fetch_message(int(call['message_id']))
                     if message:
-                        # Cria a lista de participantes para o embed
                         participantes_text = ""
                         if bot.call_participants[call_id]:
                             participantes_list = []
@@ -321,7 +299,6 @@ class CallButton(Button):
                         else:
                             participantes_text = "Ninguém confirmou ainda"
                         
-                        # Monta o embed IGUALZINHO ao que você mandou
                         data_atual = datetime.now().strftime("%d.%m")
                         
                         descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
@@ -378,7 +355,6 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
                 
                 embed_privado.add_field(name="📅 Data/Hora", value=call['data_hora'], inline=True)
                 embed_privado.add_field(name="📍 Local", value=call['local'], inline=True)
-                
                 embed_privado.add_field(name="👤 Organizador", value=f"<@{call['criador_id']}>", inline=True)
                 embed_privado.add_field(name="📊 Total", value=f"{len(bot.call_participants[call_id])} confirmados", inline=True)
                 embed_privado.set_footer(text="Obrigado por confirmar! 🎉")
@@ -388,12 +364,12 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
                 pass
             
             await interaction.response.send_message(
-                f"✅ **Presença confirmada!** Agora temos **{len(bot.call_participants[call_id])}** confirmado(s)!",
+                f"✅ Presença confirmada! Total: {len(bot.call_participants[call_id])}",
                 ephemeral=True
             )
             
         except Exception as e:
-            print(f"Erro no botão: {e}")
+            print(f"Erro: {e}")
             await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
 
 class CallView(View):
@@ -401,19 +377,21 @@ class CallView(View):
         super().__init__(timeout=None)
         self.add_item(CallButton(call_id, emoji, expira_em))
 
-@bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone) - Vence meia-noite automático")
+@bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone)")
 @app_commands.describe(
-    titulo="Título do evento (opcional)",
-    data_hora="Data e hora (ex: 15:40)",
+    titulo="Título do evento",
+    data_hora="Data e hora (ex: 15:40 ou 25/12 20h)",
     local="Local do evento",
+    horas_duracao="Horas para expirar (opcional - se não colocar, vence meia-noite)",
     descricao="Descrição adicional (opcional)",
     emoji="Emoji do botão (padrão: ✅)"
 )
 async def chamada(
     interaction: discord.Interaction,
-    titulo: str = "CHAMADA",
-    data_hora: str = "15:40",
-    local: str = "Discord",
+    titulo: str,
+    data_hora: str,
+    local: str,
+    horas_duracao: Optional[int] = None,
     descricao: str = "",
     emoji: str = "✅"
 ):
@@ -425,16 +403,22 @@ async def chamada(
         await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
     
-    # Calcula meia-noite automático (SEMPRE meia-noite, sem opção de escolha)
-    expira_em = calcular_meia_noite()
+    # Calcula tempo de expiração baseado na escolha do usuário
+    expira_em = calcular_tempo_expiracao(horas_duracao)
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
     data_atual = datetime.now().strftime("%d.%m")
     
-    # Monta o embed IGUALZINHO ao que você mandou
+    # Texto do timing para mostrar no embed
+    if horas_duracao:
+        timing_text = f"⏰ Expira em {horas_duracao} hora(s)"
+    else:
+        timing_text = "🌙 Expira à meia-noite"
+    
+    # Monta o embed com a decoração
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
 ५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
-𓈒 ׂ 🪷੭ ᮫ : Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍
+𓈒 ׂ 🪷੭ ᮫ : {descricao if descricao else "Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍"}
 
 ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
 [𒃵] A cada ausência não justificada, será registrado um tracinho.
@@ -451,6 +435,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
 ५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
 ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
 
+**⏰ {timing_text}**
 **✅ PRESENTES: 0**"""
     
     embed = discord.Embed(
@@ -493,28 +478,34 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
         'message_id': str(message.id),
         'emoji': emoji,
         'expira_em': expira_em.isoformat(),
-        'criado_em': datetime.now().isoformat()
+        'criado_em': datetime.now().isoformat(),
+        'horas_duracao': horas_duracao
     }
     
     bot.call_participants[call_id] = []
     bot.save_data()
     
     # Mensagem de confirmação
+    if horas_duracao:
+        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s)"
+    else:
+        confirm_msg = "🌙 Expira à meia-noite"
+    
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
-        description=f"Chamada criada com sucesso!",
+        description=f"**{titulo}** criada com sucesso!",
         color=discord.Color.green()
     )
     
     embed_confirm.add_field(
-        name="🌙 Vence",
-        value="Meia-noite automático",
+        name="⏰ Timing",
+        value=confirm_msg,
         inline=False
     )
     
     await interaction.followup.send(embed=embed_confirm, ephemeral=True)
     
-    # Agenda o encerramento da chamada
+    # Agenda o encerramento
     asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
 
 async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
@@ -525,7 +516,6 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
     if tempo_espera > 0:
         await asyncio.sleep(tempo_espera)
     
-    # Verifica se a chamada ainda existe
     if call_id not in bot.call_data:
         return
     
@@ -533,12 +523,10 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
         call = bot.call_data[call_id]
         participantes = bot.call_participants.get(call_id, [])
         
-        # Busca o canal e a mensagem
         channel = bot.get_channel(int(call['channel_id']))
         if channel:
             message = await channel.fetch_message(int(call['message_id']))
             if message:
-                # Cria lista de participantes para o embed final
                 participantes_text = ""
                 if participantes:
                     participantes_list = []
@@ -556,10 +544,15 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                 else:
                     participantes_text = "Ninguém compareceu 😢"
                 
-                # Embed de encerramento
+                # Define o texto do motivo do encerramento
+                if call.get('horas_duracao'):
+                    motivo = f"APÓS {call['horas_duracao']} HORA(S)"
+                else:
+                    motivo = "À MEIA-NOITE"
+                
                 embed_final = discord.Embed(
                     title=f"📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
-                    description=f"**CHAMADA ENCERRADA À MEIA-NOITE**\n\nTotal de presentes: **{len(participantes)}**",
+                    description=f"**CHAMADA ENCERRADA {motivo}**\n\nTotal de presentes: **{len(participantes)}**",
                     color=discord.Color.dark_gray()
                 )
                 
@@ -572,10 +565,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                 embed_final.set_footer(text="Chamada encerrada automaticamente")
                 embed_final.timestamp = datetime.now()
                 
-                # Remove o botão e atualiza mensagem
                 await message.edit(embed=embed_final, view=None)
-                
-                # Envia mensagem de encerramento
                 await channel.send(f"⏰ **Chamada encerrada!** Total de {len(participantes)} presente(s)!")
     except Exception as e:
         print(f"Erro ao encerrar chamada: {e}")
@@ -601,7 +591,10 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
             expira_em = datetime.fromisoformat(data['expira_em'])
             
             if expira_em > datetime.now():
-                status = "🟢 Ativa (vence meia-noite)"
+                if data.get('horas_duracao'):
+                    status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
+                else:
+                    status = "🟢 Ativa (vence meia-noite)"
             else:
                 status = "🔴 Encerrada"
             
@@ -629,7 +622,10 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
     expira_em = datetime.fromisoformat(data['expira_em'])
     
     if expira_em > datetime.now():
-        status = "🟢 Ativa (vence meia-noite)"
+        if data.get('horas_duracao'):
+            status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
+        else:
+            status = "🟢 Ativa (vence meia-noite)"
     else:
         status = "🔴 Encerrada"
     
@@ -686,7 +682,6 @@ async def chamada_lista(interaction: discord.Interaction, message_id: str):
         if member:
             lista += f"{i}. {member.mention}\n"
     
-    # Divide em múltiplos campos se necessário
     if len(lista) > 1024:
         partes = [lista[i:i+1024] for i in range(0, len(lista), 1024)]
         for j, parte in enumerate(partes):
@@ -2025,11 +2020,12 @@ async def ajuda(interaction: discord.Interaction):
     
     embed.add_field(
         name="📢 **CHAMADAS**",
-        value="`/chamada` - Criar chamada (vence meia-noite automático)\n"
+        value="`/chamada` - Criar chamada\n"
               "`/chamada_info` - Ver informações\n"
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
-              "✨ **AUTOMÁTICO: VENCE À MEIA-NOITE TODOS OS DIAS!**",
+              "✨ **Timing:** Se não colocar horas, vence meia-noite!\n"
+              "✨ **Personalizado:** Pode escolher quantas horas dura",
         inline=False
     )
     
@@ -2095,7 +2091,7 @@ async def ajuda(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="🎮 **NOVOS JOGOS**",
+        name="🎮 **JOGOS**",
         value="`/moeda` - Cara ou coroa\n"
               "`/rps` - Pedra papel tesoura\n"
               "`/dado_rpg` - Dados de RPG\n"
@@ -2132,15 +2128,13 @@ async def ajuda(interaction: discord.Interaction):
 
 # ==================== INICIAR BOT ====================
 async def main():
-    """Função principal"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
-    # Pega o token das variáveis de ambiente
     token = os.environ.get('DISCORD_TOKEN')
     
     if not token:
         print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
-        print("📌 Certifique-se de que a variável DISCORD_TOKEN está configurada no Vercel")
+        print("📌 Certifique-se de que a variável DISCORD_TOKEN está configurada")
         return
     
     print(f"🔵 Token encontrado! Conectando...")
@@ -2168,13 +2162,14 @@ if __name__ == "__main__":
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
     print("✅ Sistema de Chamadas (com decoração perfeita)")
-    print("✅ Vence meia-noite AUTOMATICAMENTE")
+    print("✅ Timing INTELIGENTE: se não colocar horas, vence meia-noite")
+    print("✅ Pode escolher quantas horas dura (horas_duracao)")
+    print("✅ O horário da chamada é o que você digitar em data_hora")
     print("✅ Sistema de Ship (likes, ranking)")
     print("✅ Sistema de Casamento (com economia)")
     print("✅ Sistema de Presentes e Signos")
     print("✅ Sistema de Economia (daily, slots)")
     print("✅ Comandos com GIF (abraço, beijo, etc)")
-    print("✅ Novos Jogos (dado_rpg, enquete, sorteio)")
     print("✅ 70+ COMANDOS NO TOTAL!")
     print("="*60)
     
