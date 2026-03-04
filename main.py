@@ -240,7 +240,7 @@ class Fort(discord.Client):
         print(f"✅ Bot {self.user} ligado com sucesso!")
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
-        print(f"📢 Sistema de Chamadas: ATIVO (com timing opcional)")
+        print(f"📢 Sistema de Chamadas: ATIVO (vence meia-noite automático)")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
@@ -251,156 +251,18 @@ class Fort(discord.Client):
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS COM TIMING PERSONALIZADO ====================
+# ==================== SISTEMA DE CHAMADAS COM TIMING AUTOMÁTICO ====================
 
-def calcular_tempo_expiracao(horas: Optional[int] = None):
-    """Calcula o tempo de expiração da chamada"""
+def calcular_meia_noite():
+    """Calcula o timestamp da meia-noite de hoje"""
     agora = datetime.now()
+    meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
     
-    if horas is not None and horas > 0:
-        # Se especificou horas, expira após X horas
-        return agora + timedelta(hours=horas)
-    else:
-        # Se não especificou, expira à meia-noite de hoje
-        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
-        
-        # Se já passou da meia-noite, vai para meia-noite de amanhã
-        if agora > meia_noite:
-            meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-        
-        return meia_noite
-
-def criar_embed_chamada(titulo: str, data_hora: str, local: str, descricao: str, 
-                        criador: discord.Member, expira_em: datetime, 
-                        participantes: list, guild_icon=None):
-    """Cria o embed da chamada com o formato visual solicitado"""
+    # Se já passou da meia-noite de hoje, vai para amanhã
+    if agora > meia_noite:
+        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
     
-    data_atual = datetime.now().strftime("%d.%m")
-    
-    # Formata a data/hora de expiração
-    if expira_em.hour == 23 and expira_em.minute == 59 and expira_em.second == 59:
-        timing_text = f"🌙 Expira à meia-noite"
-    else:
-        timing_text = f"⏰ Expira <t:{int(expira_em.timestamp())}:R>"
-    
-    # Cria lista de participantes
-    participantes_text = ""
-    if participantes:
-        participantes_list = []
-        for pid in participantes:
-            if pid:  # Verifica se não é None
-                participantes_list.append(f"<@{pid}>")
-        
-        if participantes_list:
-            if len(participantes_list) <= 10:
-                participantes_text = "\n".join(participantes_list)
-            else:
-                participantes_text = "\n".join(participantes_list[:10])
-                participantes_text += f"\n... e mais {len(participantes_list) - 10} pessoa(s)"
-    else:
-        participantes_text = "Ninguém confirmou ainda"
-    
-    # Constrói o embed com o formato visual
-    descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
-
-५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
-𓈒 ׂ 🪷੭ ᮫ : {descricao if descricao else "Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍"}
-
-ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
-[𒃵] A cada ausência não justificada, será registrado um tracinho.
-
-𑇡 📝 Ao acumular sete tracinhos, será banido automaticamente.
-Caso tenha algum compromisso, justifique sua ausência. Estarei registrando os presentes no horário correto, então não será considerada confirmação fora do período informado.
-
-여기 ㅤ🔔✨ ; A chamada começará às {data_hora}.
-Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vontade para continuar suas atividades após isso.
-✦𓂃 Utilize o emoji ✅ para responder à chamada.
-
-ⓘ Lembrando: Marcar presença e desaparecer completamente da House até a próxima chamada também resultará em registro de ausência. Compromisso é essencial para mantermos a organização e o bom funcionamento daqui.
-
-५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
-ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
-
-**✅ CONFIRMADOS: {len(participantes)}**"""
-
-    embed = discord.Embed(
-        title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
-        description=descricao_completa,
-        color=discord.Color.from_str("#FF69B4")  # Rosa
-    )
-    
-    # Adiciona campo com a lista de participantes
-    embed.add_field(
-        name="📋 LISTA DE PRESENTES",
-        value=participantes_text,
-        inline=False
-    )
-    
-    # Adiciona campo com informações de timing
-    embed.add_field(
-        name="⏰ STATUS",
-        value=f"{timing_text}\n👤 Organizador: {criador.mention}",
-        inline=False
-    )
-    
-    if guild_icon:
-        embed.set_thumbnail(url=guild_icon.url)
-    
-    embed.set_footer(text="Clique no botão abaixo para confirmar sua presença!")
-    embed.timestamp = datetime.now()
-    
-    return embed
-
-def criar_embed_chamada_finalizada(titulo: str, data_hora: str, local: str, 
-                                   participantes: list, total_confirmados: int):
-    """Cria o embed final quando a chamada expira"""
-    
-    data_atual = datetime.now().strftime("%d.%m")
-    
-    # Cria lista de participantes
-    participantes_text = ""
-    if participantes:
-        participantes_list = []
-        for pid in participantes:
-            if pid:
-                participantes_list.append(f"<@{pid}>")
-        
-        if participantes_list:
-            if len(participantes_list) <= 20:
-                for i, mention in enumerate(participantes_list, 1):
-                    participantes_text += f"{i}. {mention}\n"
-            else:
-                for i, mention in enumerate(participantes_list[:20], 1):
-                    participantes_text += f"{i}. {mention}\n"
-                participantes_text += f"\n... e mais {len(participantes_list) - 20} pessoas"
-    else:
-        participantes_text = "Ninguém compareceu 😢"
-    
-    descricao = f"""📊 **CHAMADA ENCERRADA**
-
-Data: {data_hora}
-Local: {local}
-Total de presentes: {total_confirmados}
-
-Obrigado a todos que compareceram! 🎉
-"""
-    
-    embed = discord.Embed(
-        title=f"📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
-        description=descricao,
-        color=discord.Color.dark_gray()
-    )
-    
-    embed.add_field(
-        name="✅ LISTA FINAL DE PRESENTES",
-        value=participantes_text,
-        inline=False
-    )
-    
-    embed.set_footer(text="Chamada encerrada - Obrigado pela participação!")
-    embed.timestamp = datetime.now()
-    
-    return embed
+    return meia_noite
 
 class CallButton(Button):
     def __init__(self, call_id: str, emoji: str, expira_em: datetime):
@@ -445,20 +307,66 @@ class CallButton(Button):
                 if channel:
                     message = await channel.fetch_message(int(call['message_id']))
                     if message:
-                        # Cria novo embed atualizado
-                        guild_icon = interaction.guild.icon if interaction.guild else None
-                        novo_embed = criar_embed_chamada(
-                            titulo=call['titulo'],
-                            data_hora=call['data_hora'],
-                            local=call['local'],
-                            descricao=call['descricao'],
-                            criador=interaction.guild.get_member(int(call['criador_id'])) or interaction.user,
-                            expira_em=datetime.fromisoformat(call['expira_em']),
-                            participantes=bot.call_participants[call_id],
-                            guild_icon=guild_icon
+                        # Cria a lista de participantes para o embed
+                        participantes_text = ""
+                        if bot.call_participants[call_id]:
+                            participantes_list = []
+                            for pid in bot.call_participants[call_id]:
+                                member = interaction.guild.get_member(int(pid))
+                                if member:
+                                    participantes_list.append(member.mention)
+                            
+                            if participantes_list:
+                                participantes_text = "\n".join(participantes_list[:10])
+                                if len(participantes_list) > 10:
+                                    participantes_text += f"\n... e mais {len(participantes_list) - 10}"
+                        else:
+                            participantes_text = "Ninguém confirmou ainda"
+                        
+                        # Monta o embed IGUALZINHO ao que você mandou
+                        data_atual = datetime.now().strftime("%d.%m")
+                        
+                        descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
+
+५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
+𓈒 ׂ 🪷੭ ᮫ : Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍
+
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
+[𒃵] A cada ausência não justificada, será registrado um tracinho.
+
+𑇡 📝 Ao acumular sete tracinhos, será banido automaticamente.
+Caso tenha algum compromisso, justifique sua ausência em. Estarei registrando os presentes no horário correto, então não será considerada confirmação fora do período informado.
+
+여기 ㅤ🔔✨ ; A chamada começará às {call['data_hora']}.
+Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vontade para continuar suas atividades após isso.
+✦𓂃 Utilize o emoji {call['emoji']} para responder à chamada.
+
+ⓘ Lembrando: Marcar presença e desaparecer completamente da House até a próxima chamada também resultará em registro de ausência. Compromisso é essencial para mantermos a organização e o bom funcionamento daqui.
+
+५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
+
+**✅ PRESENTES: {len(bot.call_participants[call_id])}**"""
+                        
+                        embed = discord.Embed(
+                            title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
+                            description=descricao_completa,
+                            color=discord.Color.from_str("#FF69B4")
                         )
                         
-                        await message.edit(embed=novo_embed)
+                        embed.add_field(
+                            name="📋 LISTA DE PRESENTES",
+                            value=participantes_text if participantes_text else "Ninguém confirmou ainda",
+                            inline=False
+                        )
+                        
+                        if interaction.guild.icon:
+                            embed.set_thumbnail(url=interaction.guild.icon.url)
+                        
+                        embed.set_footer(text="Clique no botão abaixo para confirmar sua presença!")
+                        embed.timestamp = datetime.now()
+                        
+                        await message.edit(embed=embed)
             except Exception as e:
                 print(f"Erro ao atualizar embed: {e}")
             
@@ -470,7 +378,7 @@ class CallButton(Button):
                     color=discord.Color.green()
                 )
                 
-                embed_privado.add_field(name="📅 Data", value=call['data_hora'], inline=True)
+                embed_privado.add_field(name="📅 Data/Hora", value=call['data_hora'], inline=True)
                 embed_privado.add_field(name="📍 Local", value=call['local'], inline=True)
                 
                 embed_privado.add_field(name="👤 Organizador", value=f"<@{call['criador_id']}>", inline=True)
@@ -495,21 +403,19 @@ class CallView(View):
         super().__init__(timeout=None)
         self.add_item(CallButton(call_id, emoji, expira_em))
 
-@bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone) com timing personalizado")
+@bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone) - Vence meia-noite automático")
 @app_commands.describe(
-    titulo="Título do evento",
+    titulo="Título do evento (opcional)",
     data_hora="Data e hora (ex: 15:40)",
     local="Local do evento",
-    horas_limite="Horas para expirar (opcional - se não colocar, vence à meia-noite)",
-    descricao="Descrição detalhada",
+    descricao="Descrição adicional (opcional)",
     emoji="Emoji do botão (padrão: ✅)"
 )
 async def chamada(
     interaction: discord.Interaction,
-    titulo: str,
-    data_hora: str,
-    local: str,
-    horas_limite: Optional[int] = None,
+    titulo: str = "CHAMADA",
+    data_hora: str = "15:40",
+    local: str = "Discord",
     descricao: str = "",
     emoji: str = "✅"
 ):
@@ -521,26 +427,56 @@ async def chamada(
         await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
     
-    # Calcula tempo de expiração
-    expira_em = calcular_tempo_expiracao(horas_limite)
+    # Calcula meia-noite automático (SEMPRE meia-noite, sem opção de escolha)
+    expira_em = calcular_meia_noite()
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
+    data_atual = datetime.now().strftime("%d.%m")
     
-    # Cria o embed com o formato visual
-    embed = criar_embed_chamada(
-        titulo=titulo,
-        data_hora=data_hora,
-        local=local,
-        descricao=descricao,
-        criador=interaction.user,
-        expira_em=expira_em,
-        participantes=[],
-        guild_icon=interaction.guild.icon
+    # Monta o embed IGUALZINHO ao que você mandou
+    descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
+
+५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
+𓈒 ׂ 🪷੭ ᮫ : Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍
+
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
+[𒃵] A cada ausência não justificada, será registrado um tracinho.
+
+𑇡 📝 Ao acumular sete tracinhos, será banido automaticamente.
+Caso tenha algum compromisso, justifique sua ausência em. Estarei registrando os presentes no horário correto, então não será considerada confirmação fora do período informado.
+
+여기 ㅤ🔔✨ ; A chamada começará às {data_hora}.
+Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vontade para continuar suas atividades após isso.
+✦𓂃 Utilize o emoji {emoji} para responder à chamada.
+
+ⓘ Lembrando: Marcar presença e desaparecer completamente da House até a próxima chamada também resultará em registro de ausência. Compromisso é essencial para mantermos a organização e o bom funcionamento daqui.
+
+५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
+
+**✅ PRESENTES: 0**"""
+    
+    embed = discord.Embed(
+        title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
+        description=descricao_completa,
+        color=discord.Color.from_str("#FF69B4")
     )
+    
+    embed.add_field(
+        name="📋 LISTA DE PRESENTES",
+        value="Ninguém confirmou ainda",
+        inline=False
+    )
+    
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    
+    embed.set_footer(text="Clique no botão abaixo para confirmar sua presença!")
+    embed.timestamp = datetime.now()
     
     view = CallView(call_id, emoji, expira_em)
     
     await interaction.response.send_message(
-        content="@everyone 📢 **NOVA CHAMADA!** 📢",
+        content="@everyone",
         embed=embed,
         view=view,
         allowed_mentions=discord.AllowedMentions(everyone=True)
@@ -559,28 +495,22 @@ async def chamada(
         'message_id': str(message.id),
         'emoji': emoji,
         'expira_em': expira_em.isoformat(),
-        'criado_em': datetime.now().isoformat(),
-        'horas_limite': horas_limite
+        'criado_em': datetime.now().isoformat()
     }
     
     bot.call_participants[call_id] = []
     bot.save_data()
     
     # Mensagem de confirmação
-    if horas_limite:
-        timing_msg = f"⏰ Expira em {horas_limite} hora(s)"
-    else:
-        timing_msg = "🌙 Expira à meia-noite"
-    
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
-        description=f"**{titulo}** criada com sucesso!",
+        description=f"Chamada criada com sucesso!",
         color=discord.Color.green()
     )
     
     embed_confirm.add_field(
-        name="⏰ Timing",
-        value=timing_msg,
+        name="🌙 Vence",
+        value="Meia-noite automático",
         inline=False
     )
     
@@ -610,14 +540,39 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
         if channel:
             message = await channel.fetch_message(int(call['message_id']))
             if message:
-                # Cria embed final
-                embed_final = criar_embed_chamada_finalizada(
-                    titulo=call['titulo'],
-                    data_hora=call['data_hora'],
-                    local=call['local'],
-                    participantes=participantes,
-                    total_confirmados=len(participantes)
+                # Cria lista de participantes para o embed final
+                participantes_text = ""
+                if participantes:
+                    participantes_list = []
+                    for pid in participantes:
+                        member = channel.guild.get_member(int(pid))
+                        if member:
+                            participantes_list.append(f"• {member.mention}")
+                    
+                    if participantes_list:
+                        if len(participantes_list) <= 20:
+                            participantes_text = "\n".join(participantes_list)
+                        else:
+                            participantes_text = "\n".join(participantes_list[:20])
+                            participantes_text += f"\n... e mais {len(participantes_list) - 20} pessoa(s)"
+                else:
+                    participantes_text = "Ninguém compareceu 😢"
+                
+                # Embed de encerramento
+                embed_final = discord.Embed(
+                    title=f"📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
+                    description=f"**CHAMADA ENCERRADA À MEIA-NOITE**\n\nTotal de presentes: **{len(participantes)}**",
+                    color=discord.Color.dark_gray()
                 )
+                
+                embed_final.add_field(
+                    name="✅ LISTA FINAL",
+                    value=participantes_text,
+                    inline=False
+                )
+                
+                embed_final.set_footer(text="Chamada encerrada automaticamente")
+                embed_final.timestamp = datetime.now()
                 
                 # Remove o botão e atualiza mensagem
                 await message.edit(embed=embed_final, view=None)
@@ -648,7 +603,7 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
             expira_em = datetime.fromisoformat(data['expira_em'])
             
             if expira_em > datetime.now():
-                status = "🟢 Ativa"
+                status = "🟢 Ativa (vence meia-noite)"
             else:
                 status = "🔴 Encerrada"
             
@@ -676,7 +631,7 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
     expira_em = datetime.fromisoformat(data['expira_em'])
     
     if expira_em > datetime.now():
-        status = "🟢 Ativa"
+        status = "🟢 Ativa (vence meia-noite)"
     else:
         status = "🔴 Encerrada"
     
@@ -686,9 +641,6 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
     embed.add_field(name="👤 Criador", value=f"<@{data['criador_id']}>", inline=True)
     embed.add_field(name="✅ Confirmados", value=str(len(participantes)), inline=True)
     embed.add_field(name="📊 Status", value=status, inline=True)
-    
-    if expira_em > datetime.now():
-        embed.add_field(name="⏰ Expira em", value=f"<t:{int(expira_em.timestamp())}:R>", inline=True)
     
     if participantes:
         lista = ""
@@ -1919,7 +1871,7 @@ async def matar(interaction: discord.Interaction, membro: discord.Member):
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command name="chifre", description="🦌 Dar chifre em alguém")
+@bot.tree.command(name="chifre", description="🦌 Dar chifre em alguém")
 async def chifre(interaction: discord.Interaction, membro: discord.Member):
     embed = discord.Embed(
         title="🦌 CHIFRE!",
@@ -2075,11 +2027,11 @@ async def ajuda(interaction: discord.Interaction):
     
     embed.add_field(
         name="📢 **CHAMADAS**",
-        value="`/chamada` - Criar chamada (timing opcional)\n"
+        value="`/chamada` - Criar chamada (vence meia-noite automático)\n"
               "`/chamada_info` - Ver informações\n"
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
-              "✨ Timing automático: se não escolher horas, vence à meia-noite",
+              "✨ **AUTOMÁTICO: VENCE À MEIA-NOITE TODOS OS DIAS!**",
         inline=False
     )
     
@@ -2180,9 +2132,9 @@ async def ajuda(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== INICIAR BOT SEM LOOP IDIOTA ====================
+# ==================== INICIAR BOT ====================
 async def main():
-    """Função principal - SEM LOOP DE RECONEXÃO"""
+    """Função principal"""
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
     # Pega o token
@@ -2198,7 +2150,6 @@ async def main():
     print(f"🔵 Token encontrado! Conectando...")
     
     try:
-        # CONECTA UMA ÚNICA VEZ - SEM LOOP, SEM TIMEOUT
         async with bot:
             await bot.start(token)
     except Exception as e:
@@ -2207,15 +2158,9 @@ async def main():
 def run_bot():
     print("🟢 INICIANDO BOT")
     try:
-        # Servidor web
         keep_alive()
-        
-        # Dá tempo pro servidor web iniciar
         time.sleep(2)
-        
-        # Inicia o bot
         asyncio.run(main())
-        
     except KeyboardInterrupt:
         print("👋 Desligando")
     except Exception as e:
@@ -2223,10 +2168,11 @@ def run_bot():
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO 70+ COMANDOS")
+    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas (com timing opcional - meia-noite automático)")
+    print("✅ Sistema de Chamadas (com decoração perfeita)")
+    print("✅ Vence meia-noite AUTOMATICAMENTE")
     print("✅ Sistema de Ship (likes, ranking)")
     print("✅ Sistema de Casamento (com economia)")
     print("✅ Sistema de Presentes e Signos")
@@ -2236,5 +2182,4 @@ if __name__ == "__main__":
     print("✅ 70+ COMANDOS NO TOTAL!")
     print("="*60)
     
-    # Executa o bot
     run_bot()
