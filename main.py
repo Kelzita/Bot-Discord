@@ -1,7 +1,7 @@
 import sys
 import discord
 from discord import app_commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Select, Modal, TextInput
 import random
 import json
 import aiohttp
@@ -16,7 +16,6 @@ import logging
 import traceback
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# Pega o token das variáveis de ambiente
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # ===== IMPORTS DO SERVIDOR WEB =====
@@ -27,6 +26,57 @@ import threading
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO)
 
+# ===== SISTEMA DE CONFIGURAÇÃO LOCAL =====
+CONFIG_FILE = 'bot_config.json'
+
+def load_config():
+    """Carrega as configurações do bot do arquivo JSON"""
+    default_config = {
+        "nome": "Fort Bot",
+        "foto": None,
+        "status": "📢 Use /ajuda | 70+ comandos!",
+        "prefixo": "/",
+        "cor_embed": "#FF69B4",
+        "atividade_tipo": "playing",
+        "sistemas_ativos": {
+            "chamadas": True,
+            "ship": True,
+            "casamento": True,
+            "economia": True,
+            "gifs": True,
+            "jogos": True
+        }
+    }
+    
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                for key, value in default_config.items():
+                    if key not in config:
+                        config[key] = value
+                return config
+        else:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, ensure_ascii=False, indent=4)
+            return default_config
+    except Exception as e:
+        print(f"⚠️ Erro ao carregar configurações: {e}")
+        return default_config
+
+def save_config(config):
+    """Salva as configurações do bot no arquivo JSON"""
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception as e:
+        print(f"⚠️ Erro ao salvar configurações: {e}")
+        return False
+
+# Carrega configurações
+BOT_CONFIG = load_config()
+
 # ===== SERVIDOR WEB =====
 app = Flask(__name__)
 
@@ -34,7 +84,7 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "online",
-        "bot": "Fort Bot",
+        "bot": BOT_CONFIG.get("nome", "Fort Bot"),
         "sistemas": 70
     })
 
@@ -47,10 +97,13 @@ def health():
 def ping():
     return "pong", 200
 
+@app.route('/config')
+def config_page():
+    return jsonify(BOT_CONFIG)
+
 def run_webserver():
     """Inicia o servidor web - usa a porta do ambiente"""
-    # No Vercel, a porta é fornecida pela variável PORT
-    port = int(os.environ.get('PORT', 8080))  # 8080 é a padrão do Vercel
+    port = int(os.environ.get('PORT', 8080))
     print(f"📡 Iniciando servidor web na porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
@@ -59,6 +112,261 @@ def keep_alive():
     server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
     print(f"✅ Servidor web configurado")
+
+# ===== MODAIS DE CONFIGURAÇÃO =====
+
+class ConfigNomeModal(Modal, title="📝 Configurar Nome do Bot"):
+    nome = TextInput(label="Novo nome do bot", placeholder="Digite o novo nome...", max_length=32)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        global BOT_CONFIG
+        BOT_CONFIG["nome"] = str(self.nome)
+        save_config(BOT_CONFIG)
+        
+        try:
+            await interaction.client.user.edit(username=str(self.nome))
+            await interaction.response.send_message(f"✅ Nome alterado para **{self.nome}**!", ephemeral=True)
+        except:
+            await interaction.response.send_message(f"✅ Configuração salva! **Nome: {self.nome}** (será aplicado na próxima reinicialização)", ephemeral=True)
+
+class ConfigFotoModal(Modal, title="🖼️ Configurar Foto do Bot"):
+    foto_url = TextInput(label="URL da nova foto", placeholder="https://exemplo.com/foto.png", required=False)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        global BOT_CONFIG
+        if self.foto_url.value:
+            BOT_CONFIG["foto"] = str(self.foto_url)
+            msg = f"🖼️ URL da foto salva: {self.foto_url}"
+        else:
+            BOT_CONFIG["foto"] = None
+            msg = "🖼️ Foto removida (usará a padrão)"
+        
+        save_config(BOT_CONFIG)
+        
+        try:
+            if self.foto_url.value:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(str(self.foto_url)) as resp:
+                        if resp.status == 200:
+                            image_data = await resp.read()
+                            await interaction.client.user.edit(avatar=image_data)
+                            msg += "\n✅ Foto atualizada!"
+            await interaction.response.send_message(msg, ephemeral=True)
+        except:
+            await interaction.response.send_message(f"{msg}\n⚠️ Foto será aplicada na próxima reinicialização", ephemeral=True)
+
+class ConfigStatusModal(Modal, title="📊 Configurar Status do Bot"):
+    status = TextInput(label="Novo status", placeholder="Digite o novo status...", max_length=128)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        global BOT_CONFIG
+        BOT_CONFIG["status"] = str(self.status)
+        save_config(BOT_CONFIG)
+        
+        try:
+            atividade_tipo = BOT_CONFIG.get("atividade_tipo", "playing")
+            if atividade_tipo == "playing":
+                atividade = discord.Game(name=str(self.status))
+            elif atividade_tipo == "watching":
+                atividade = discord.Activity(type=discord.ActivityType.watching, name=str(self.status))
+            elif atividade_tipo == "listening":
+                atividade = discord.Activity(type=discord.ActivityType.listening, name=str(self.status))
+            elif atividade_tipo == "competing":
+                atividade = discord.Activity(type=discord.ActivityType.competing, name=str(self.status))
+            else:
+                atividade = discord.Game(name=str(self.status))
+            
+            await interaction.client.change_presence(activity=atividade)
+            await interaction.response.send_message(f"✅ Status alterado para: **{self.status}**", ephemeral=True)
+        except:
+            await interaction.response.send_message(f"✅ Status salvo: **{self.status}**", ephemeral=True)
+
+class ConfigCorModal(Modal, title="🎨 Configurar Cor dos Embeds"):
+    cor = TextInput(label="Cor em HEX", placeholder="#FF69B4", max_length=7)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        global BOT_CONFIG
+        cor = str(self.cor)
+        if not cor.startswith('#'):
+            cor = '#' + cor
+        
+        BOT_CONFIG["cor_embed"] = cor
+        save_config(BOT_CONFIG)
+        
+        embed = discord.Embed(
+            title="🎨 Cor Alterada!",
+            description=f"Nova cor: **{cor}**",
+            color=discord.Color.from_str(cor)
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ===== VIEWS DE CONFIGURAÇÃO =====
+
+class AtividadeSelect(Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Jogando", value="playing", emoji="🎮", description="'Jogando [status]'"),
+            discord.SelectOption(label="Assistindo", value="watching", emoji="📺", description="'Assistindo [status]'"),
+            discord.SelectOption(label="Ouvindo", value="listening", emoji="🎵", description="'Ouvindo [status]'"),
+            discord.SelectOption(label="Competindo", value="competing", emoji="🏆", description="'Competindo em [status]'"),
+        ]
+        super().__init__(placeholder="Escolha o tipo de atividade...", options=options)
+    
+    async def callback(self, interaction: discord.Interaction):
+        global BOT_CONFIG
+        BOT_CONFIG["atividade_tipo"] = self.values[0]
+        save_config(BOT_CONFIG)
+        
+        try:
+            status = BOT_CONFIG.get("status", "📢 Use /ajuda | 70+ comandos!")
+            if self.values[0] == "playing":
+                atividade = discord.Game(name=status)
+            elif self.values[0] == "watching":
+                atividade = discord.Activity(type=discord.ActivityType.watching, name=status)
+            elif self.values[0] == "listening":
+                atividade = discord.Activity(type=discord.ActivityType.listening, name=status)
+            elif self.values[0] == "competing":
+                atividade = discord.Activity(type=discord.ActivityType.competing, name=status)
+            
+            await interaction.client.change_presence(activity=atividade)
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="⚙️ Atividade Alterada!",
+            description=f"Tipo de atividade: **{self.values[0]}**",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class AtividadeSelectView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(AtividadeSelect())
+
+class SistemasView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.atualizar_botoes()
+    
+    def criar_embed(self):
+        embed = discord.Embed(
+            title="🔧 Sistemas do Bot",
+            description="Clique nos botões para ativar/desativar sistemas:",
+            color=discord.Color.blue()
+        )
+        
+        for sistema, ativo in BOT_CONFIG["sistemas_ativos"].items():
+            status = "✅ ATIVO" if ativo else "❌ DESATIVADO"
+            embed.add_field(name=sistema.capitalize(), value=status, inline=True)
+        
+        return embed
+    
+    def atualizar_botoes(self):
+        self.clear_items()
+        
+        sistemas = list(BOT_CONFIG["sistemas_ativos"].items())
+        for i, (sistema, ativo) in enumerate(sistemas):
+            estilo = discord.ButtonStyle.success if ativo else discord.ButtonStyle.secondary
+            emoji = "✅" if ativo else "❌"
+            botao = SistemaButton(sistema, ativo, estilo, emoji)
+            self.add_item(botao)
+        
+        self.add_item(SalvarConfigButton())
+
+class SistemaButton(Button):
+    def __init__(self, sistema, ativo, estilo, emoji):
+        super().__init__(style=estilo, label=sistema.capitalize(), emoji=emoji, row=0)
+        self.sistema = sistema
+        self.ativo = ativo
+    
+    async def callback(self, interaction: discord.Interaction):
+        BOT_CONFIG["sistemas_ativos"][self.sistema] = not self.ativo
+        nova_view = SistemasView()
+        await interaction.response.edit_message(embed=nova_view.criar_embed(), view=nova_view)
+
+class SalvarConfigButton(Button):
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.primary, label="💾 Salvar Configurações", emoji="💾", row=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        save_config(BOT_CONFIG)
+        embed = discord.Embed(
+            title="💾 Configurações Salvas!",
+            description="As alterações foram salvas com sucesso!",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class ConfigMenuView(View):
+    """Menu principal de configuração"""
+    def __init__(self):
+        super().__init__(timeout=120)
+    
+    @discord.ui.button(label="📝 Nome do Bot", style=discord.ButtonStyle.primary, emoji="📝", row=0)
+    async def nome_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ConfigNomeModal())
+    
+    @discord.ui.button(label="🖼️ Foto do Bot", style=discord.ButtonStyle.primary, emoji="🖼️", row=0)
+    async def foto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ConfigFotoModal())
+    
+    @discord.ui.button(label="📊 Status do Bot", style=discord.ButtonStyle.primary, emoji="📊", row=0)
+    async def status_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ConfigStatusModal())
+    
+    @discord.ui.button(label="🎨 Cor do Embed", style=discord.ButtonStyle.primary, emoji="🎨", row=1)
+    async def cor_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ConfigCorModal())
+    
+    @discord.ui.button(label="⚙️ Tipo de Atividade", style=discord.ButtonStyle.primary, emoji="⚙️", row=1)
+    async def atividade_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = AtividadeSelectView()
+        embed = discord.Embed(
+            title="⚙️ Tipo de Atividade",
+            description="Escolha o tipo de atividade que o bot vai exibir:",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="🔧 Sistemas Ativos", style=discord.ButtonStyle.primary, emoji="🔧", row=1)
+    async def sistemas_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = SistemasView()
+        await interaction.response.send_message(embed=view.criar_embed(), view=view, ephemeral=True)
+    
+    @discord.ui.button(label="📋 Ver Configuração", style=discord.ButtonStyle.secondary, emoji="📋", row=2)
+    async def ver_config_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        config_text = f"""**📋 Configuração Atual:**
+
+**Nome:** {BOT_CONFIG['nome']}
+**Status:** {BOT_CONFIG['status']}
+**Cor Embed:** {BOT_CONFIG['cor_embed']}
+**Atividade:** {BOT_CONFIG['atividade_tipo']}
+**Foto:** {'✅ Definida' if BOT_CONFIG['foto'] else '❌ Padrão'}
+
+**🔧 Sistemas:**
+"""
+        for sistema, ativo in BOT_CONFIG["sistemas_ativos"].items():
+            status = "✅" if ativo else "❌"
+            config_text += f"{status} {sistema.capitalize()}\n"
+        
+        embed = discord.Embed(
+            title="📋 Configuração do Bot",
+            description=config_text,
+            color=discord.Color.from_str(BOT_CONFIG['cor_embed'])
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    @discord.ui.button(label="🔄 Recarregar Config", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
+    async def reload_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global BOT_CONFIG
+        BOT_CONFIG = load_config()
+        embed = discord.Embed(
+            title="🔄 Configurações Recarregadas!",
+            description="As configurações foram recarregadas do arquivo.",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class Fort(discord.Client):
     def __init__(self):
@@ -207,41 +515,82 @@ class Fort(discord.Client):
         print(f"✅ Comandos sincronizados!")
 
     async def on_ready(self):
+        # Aplica as configurações
+        if BOT_CONFIG.get("nome") and self.user.name != BOT_CONFIG["nome"]:
+            try:
+                await self.user.edit(username=BOT_CONFIG["nome"])
+                print(f"✅ Nome alterado para: {BOT_CONFIG['nome']}")
+            except:
+                print(f"⚠️ Não foi possível alterar o nome para: {BOT_CONFIG['nome']}")
+        
+        try:
+            status = BOT_CONFIG.get("status", "📢 Use /ajuda | 70+ comandos!")
+            atividade_tipo = BOT_CONFIG.get("atividade_tipo", "playing")
+            
+            if atividade_tipo == "playing":
+                atividade = discord.Game(name=status)
+            elif atividade_tipo == "watching":
+                atividade = discord.Activity(type=discord.ActivityType.watching, name=status)
+            elif atividade_tipo == "listening":
+                atividade = discord.Activity(type=discord.ActivityType.listening, name=status)
+            elif atividade_tipo == "competing":
+                atividade = discord.Activity(type=discord.ActivityType.competing, name=status)
+            else:
+                atividade = discord.Game(name=status)
+            
+            await self.change_presence(activity=atividade)
+        except:
+            pass
+        
         print(f"✅ Bot {self.user} ligado com sucesso!")
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
-        print(f"📢 Sistema de Chamadas: ATIVO (timing opcional)")
+        print(f"📢 Sistema de Chamadas: ATIVO")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
         print(f"🎮 Sistema de Jogos: ATIVO")
         print(f"🎭 Comandos com GIF: ATIVO")
         print(f"💾 Banco de Dados: SQLite")
-        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 70+ comandos!"))
+        print(f"⚙️ Configuração: {CONFIG_FILE}")
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS COM TIMING INTELIGENTE ====================
+# ===== COMANDO DE CONFIGURAÇÃO =====
+
+@bot.tree.command(name="config", description="⚙️ Configurar o bot (nome, foto, status, etc)")
+async def config(interaction: discord.Interaction):
+    """Abre o menu de configuração do bot"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Apenas administradores podem configurar o bot!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="⚙️ Configuração do Bot",
+        description="Escolha uma opção abaixo para configurar o bot:",
+        color=discord.Color.from_str(BOT_CONFIG['cor_embed'])
+    )
+    
+    embed.add_field(name="📝 Nome", value=f"Atual: **{BOT_CONFIG['nome']}**", inline=True)
+    embed.add_field(name="📊 Status", value=f"Atual: **{BOT_CONFIG['status']}**", inline=True)
+    embed.add_field(name="🎨 Cor", value=f"Atual: {BOT_CONFIG['cor_embed']}", inline=True)
+    embed.add_field(name="⚙️ Atividade", value=f"Atual: **{BOT_CONFIG['atividade_tipo']}**", inline=True)
+    embed.add_field(name="🖼️ Foto", value="✅ Definida" if BOT_CONFIG['foto'] else "❌ Padrão", inline=True)
+    
+    view = ConfigMenuView()
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+# ==================== SISTEMA DE CHAMADAS ====================
 
 def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
-    """
-    Calcula o tempo de expiração da chamada:
-    - Se horas_limite for fornecido: expira após X horas
-    - Se não for fornecido: expira à meia-noite
-    """
     agora = datetime.now()
     
     if horas_limite is not None and horas_limite > 0:
-        # Expira após X horas
         return agora + timedelta(hours=horas_limite)
     else:
-        # Expira à meia-noite de hoje
         meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
-        
-        # Se já passou da meia-noite de hoje, vai para amanhã
         if agora > meia_noite:
             meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-        
         return meia_noite
 
 class CallButton(Button):
@@ -256,6 +605,10 @@ class CallButton(Button):
         self.expira_em = expira_em
     
     async def callback(self, interaction: discord.Interaction):
+        if not BOT_CONFIG["sistemas_ativos"]["chamadas"]:
+            await interaction.response.send_message("❌ Sistema de chamadas está desativado!", ephemeral=True)
+            return
+            
         if datetime.now() > self.expira_em:
             await interaction.response.send_message("⏰ **Esta chamada EXPIROU!**", ephemeral=True)
             return
@@ -280,7 +633,6 @@ class CallButton(Button):
             bot.call_participants[call_id].append(user_id)
             bot.save_data()
             
-            # ATUALIZA EMBED
             try:
                 channel = bot.get_channel(int(call['channel_id']))
                 if channel:
@@ -328,7 +680,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
                         embed = discord.Embed(
                             title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
                             description=descricao_completa,
-                            color=discord.Color.from_str("#FF69B4")
+                            color=discord.Color.from_str(BOT_CONFIG['cor_embed'])
                         )
                         
                         embed.add_field(
@@ -347,7 +699,6 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
             except Exception as e:
                 print(f"Erro ao atualizar embed: {e}")
             
-            # MENSAGEM PRIVADA
             try:
                 embed_privado = discord.Embed(
                     title="✅ PRESENÇA CONFIRMADA!",
@@ -397,6 +748,10 @@ async def chamada(
     descricao: str = "",
     emoji: str = "✅"
 ):
+    if not BOT_CONFIG["sistemas_ativos"]["chamadas"]:
+        await interaction.response.send_message("❌ Sistema de chamadas está desativado!", ephemeral=True)
+        return
+    
     if not interaction.user.guild_permissions.mention_everyone:
         await interaction.response.send_message("❌ Você precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
@@ -405,18 +760,15 @@ async def chamada(
         await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
     
-    # Calcula tempo de expiração baseado na escolha do usuário
     expira_em = calcular_tempo_expiracao(horas_duracao)
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
     data_atual = datetime.now().strftime("%d.%m")
     
-    # Texto do timing para mostrar no embed
     if horas_duracao:
         timing_text = f"⏰ Expira em {horas_duracao} hora(s)"
     else:
         timing_text = "🌙 Expira à meia-noite"
     
-    # Monta o embed com a decoração
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
 ५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
@@ -443,7 +795,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     embed = discord.Embed(
         title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
         description=descricao_completa,
-        color=discord.Color.from_str("#FF69B4")
+        color=discord.Color.from_str(BOT_CONFIG['cor_embed'])
     )
     
     embed.add_field(
@@ -487,7 +839,6 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     bot.call_participants[call_id] = []
     bot.save_data()
     
-    # Mensagem de confirmação
     if horas_duracao:
         confirm_msg = f"⏰ Expira em {horas_duracao} hora(s)"
     else:
@@ -507,11 +858,9 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     await interaction.followup.send(embed=embed_confirm, ephemeral=True)
     
-    # Agenda o encerramento
     asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
 
 async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
-    """Encerra a chamada após o tempo limite"""
     agora = datetime.now()
     tempo_espera = (expira_em - agora).total_seconds()
     
@@ -546,7 +895,6 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                 else:
                     participantes_text = "Ninguém compareceu 😢"
                 
-                # Define o texto do motivo do encerramento
                 if call.get('horas_duracao'):
                     motivo = f"APÓS {call['horas_duracao']} HORA(S)"
                 else:
@@ -732,10 +1080,14 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
     bot.save_data()
     await interaction.response.send_message("✅ Chamada cancelada!", ephemeral=True)
 
-# ==================== SISTEMA DE SHIP COMPLETO ====================
+# ==================== SISTEMA DE SHIP ====================
 
 @bot.tree.command(name="ship", description="💖 Calcula o amor entre duas pessoas")
 async def ship(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     base = random.randint(40, 90)
     
     if pessoa1.guild == pessoa2.guild:
@@ -800,6 +1152,10 @@ async def ship(interaction: discord.Interaction, pessoa1: discord.Member, pessoa
 
 @bot.tree.command(name="shippar", description="💘 Cria um ship oficial")
 async def shippar(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     if pessoa1 == pessoa2:
         await interaction.response.send_message("❌ Não pode shippar consigo mesmo!")
         return
@@ -833,6 +1189,10 @@ async def shippar(interaction: discord.Interaction, pessoa1: discord.Member, pes
 
 @bot.tree.command(name="likeship", description="👍 Dá like em um ship")
 async def likeship(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     ship_id = f"{pessoa1.id}-{pessoa2.id}"
     
     if ship_id not in bot.ship_data:
@@ -846,6 +1206,10 @@ async def likeship(interaction: discord.Interaction, pessoa1: discord.Member, pe
 
 @bot.tree.command(name="shipinfo", description="ℹ️ Informações do ship")
 async def shipinfo(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     ship_id = f"{pessoa1.id}-{pessoa2.id}"
     
     if ship_id not in bot.ship_data:
@@ -868,6 +1232,10 @@ async def shipinfo(interaction: discord.Interaction, pessoa1: discord.Member, pe
 
 @bot.tree.command(name="meusships", description="📋 Seus ships criados")
 async def meusships(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     ships = []
@@ -897,6 +1265,10 @@ async def meusships(interaction: discord.Interaction):
 
 @bot.tree.command(name="topship", description="🏆 Top ships")
 async def topship(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     ships = sorted(bot.ship_data.items(), key=lambda x: x[1]["likes"], reverse=True)[:10]
     
     if not ships:
@@ -921,6 +1293,10 @@ async def topship(interaction: discord.Interaction):
 
 @bot.tree.command(name="shiplist", description="📜 Lista todos os ships")
 async def shiplist(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     ships = []
     
     for ship_id, data in bot.ship_data.items():
@@ -951,6 +1327,10 @@ async def shiplist(interaction: discord.Interaction):
 
 @bot.tree.command(name="calcular_amor", description="🔮 Cálculo detalhado de compatibilidade")
 async def calcular_amor(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["ship"]:
+        await interaction.response.send_message("❌ Sistema de ship está desativado!", ephemeral=True)
+        return
+    
     categorias = {
         "Amizade": random.randint(0, 100),
         "Paixão": random.randint(0, 100),
@@ -979,6 +1359,10 @@ async def calcular_amor(interaction: discord.Interaction, pessoa1: discord.Membe
 
 @bot.tree.command(name="pedir", description="💍 Pedir em casamento (2000 moedas)")
 async def pedir(interaction: discord.Interaction, pessoa: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     target_id = str(pessoa.id)
     
@@ -1019,6 +1403,10 @@ async def pedir(interaction: discord.Interaction, pessoa: discord.Member):
 
 @bot.tree.command(name="aceitar", description="💞 Aceitar pedido de casamento")
 async def aceitar(interaction: discord.Interaction, pessoa: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     pessoa_id = str(pessoa.id)
     
@@ -1055,6 +1443,10 @@ async def aceitar(interaction: discord.Interaction, pessoa: discord.Member):
 
 @bot.tree.command(name="recusar", description="💔 Recusar pedido de casamento")
 async def recusar(interaction: discord.Interaction, pessoa: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     embed = discord.Embed(
         title="💔 PEDIDO RECUSADO",
         description=f"{interaction.user.mention} recusou {pessoa.mention}...",
@@ -1065,6 +1457,10 @@ async def recusar(interaction: discord.Interaction, pessoa: discord.Member):
 
 @bot.tree.command(name="divorciar", description="💔 Divorciar (5000 moedas)")
 async def divorciar(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     casamento_atual = None
@@ -1099,6 +1495,10 @@ async def divorciar(interaction: discord.Interaction):
 
 @bot.tree.command(name="casamento", description="💒 Ver informações do casamento")
 async def casamento(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     casamento_atual = None
@@ -1141,6 +1541,10 @@ async def casamento(interaction: discord.Interaction):
 
 @bot.tree.command(name="presentear", description="🎁 Dar presente ao cônjuge (100 moedas)")
 async def presentear(interaction: discord.Interaction, presente: str):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     casamento_atual = None
@@ -1171,6 +1575,10 @@ async def presentear(interaction: discord.Interaction, presente: str):
 
 @bot.tree.command(name="aniversario", description="🎂 Comemorar aniversário de casamento")
 async def aniversario(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     casamento_atual = None
@@ -1219,6 +1627,10 @@ async def aniversario(interaction: discord.Interaction):
 
 @bot.tree.command(name="luademel", description="🌙 Ativar modo lua de mel")
 async def luademel(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de casamento está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     casamento_atual = None
@@ -1259,6 +1671,10 @@ async def luademel(interaction: discord.Interaction):
 
 @bot.tree.command(name="signos", description="♈ Compatibilidade de signos")
 async def signos(interaction: discord.Interaction, signo1: str, signo2: str):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de presentes está desativado!", ephemeral=True)
+        return
+    
     signos_validos = ["Áries", "Touro", "Gêmeos", "Câncer", "Leão", "Virgem", 
                       "Libra", "Escorpião", "Sagitário", "Capricórnio", "Aquário", "Peixes"]
     
@@ -1277,6 +1693,10 @@ async def signos(interaction: discord.Interaction, signo1: str, signo2: str):
 
 @bot.tree.command(name="loja_presentes", description="🎁 Loja de presentes")
 async def loja_presentes(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de presentes está desativado!", ephemeral=True)
+        return
+    
     presentes = {
         "🌹 Rosa": 50,
         "🍫 Chocolate": 75,
@@ -1299,6 +1719,10 @@ async def loja_presentes(interaction: discord.Interaction):
 
 @bot.tree.command(name="comprar_presente", description="🎁 Comprar e dar um presente")
 async def comprar_presente(interaction: discord.Interaction, presente: str, usuario: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de presentes está desativado!", ephemeral=True)
+        return
+    
     presentes = {
         "🌹 Rosa": 50, "🍫 Chocolate": 75, "🧸 Ursinho": 100, "💍 Anel": 500,
         "💐 Buquê": 150, "🎂 Bolo": 200, "✉️ Carta": 30, "🎫 Cinema": 120,
@@ -1334,6 +1758,10 @@ async def comprar_presente(interaction: discord.Interaction, presente: str, usua
 
 @bot.tree.command(name="meuspresentes", description="📦 Ver presentes recebidos")
 async def meuspresentes(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["casamento"]:
+        await interaction.response.send_message("❌ Sistema de presentes está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     if user_id not in bot.user_inventory or not bot.user_inventory[user_id]:
@@ -1356,6 +1784,10 @@ async def meuspresentes(interaction: discord.Interaction):
 
 @bot.tree.command(name="daily", description="💰 Recompensa diária")
 async def daily(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["economia"]:
+        await interaction.response.send_message("❌ Sistema de economia está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     hoje = datetime.now().date()
     
@@ -1377,6 +1809,10 @@ async def daily(interaction: discord.Interaction):
 
 @bot.tree.command(name="saldo", description="💰 Ver saldo")
 async def saldo(interaction: discord.Interaction, membro: Optional[discord.Member] = None):
+    if not BOT_CONFIG["sistemas_ativos"]["economia"]:
+        await interaction.response.send_message("❌ Sistema de economia está desativado!", ephemeral=True)
+        return
+    
     if membro is None:
         membro = interaction.user
     
@@ -1387,6 +1823,10 @@ async def saldo(interaction: discord.Interaction, membro: Optional[discord.Membe
 
 @bot.tree.command(name="transferir", description="💸 Transferir moedas")
 async def transferir(interaction: discord.Interaction, membro: discord.Member, valor: int):
+    if not BOT_CONFIG["sistemas_ativos"]["economia"]:
+        await interaction.response.send_message("❌ Sistema de economia está desativado!", ephemeral=True)
+        return
+    
     if valor <= 0:
         await interaction.response.send_message("❌ Valor inválido!")
         return
@@ -1414,6 +1854,10 @@ async def transferir(interaction: discord.Interaction, membro: discord.Member, v
 
 @bot.tree.command(name="slot", description="🎰 Caça-níqueis (50 moedas)")
 async def slot(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     if user_id not in bot.user_balances or bot.user_balances[user_id] < 50:
@@ -1453,6 +1897,10 @@ async def slot(interaction: discord.Interaction):
 
 @bot.tree.command(name="dado", description="🎲 Rolar um dado")
 async def dado(interaction: discord.Interaction, lados: int = 6):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     if lados < 2:
         await interaction.response.send_message("❌ Dado precisa ter pelo menos 2 lados!")
         return
@@ -1462,6 +1910,10 @@ async def dado(interaction: discord.Interaction, lados: int = 6):
 
 @bot.tree.command(name="cara_coroa", description="🪙 Cara ou coroa")
 async def cara_coroa(interaction: discord.Interaction, escolha: str, aposta: int):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     if escolha.lower() not in ["cara", "coroa"]:
@@ -1494,6 +1946,10 @@ async def cara_coroa(interaction: discord.Interaction, escolha: str, aposta: int
 
 @bot.tree.command(name="ppt", description="✂️ Pedra, papel ou tesoura")
 async def ppt(interaction: discord.Interaction, escolha: str):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     escolhas = ["pedra", "papel", "tesoura"]
     
     if escolha.lower() not in escolhas:
@@ -1528,6 +1984,10 @@ async def ppt(interaction: discord.Interaction, escolha: str):
 
 @bot.tree.command(name="adivinha", description="🔢 Jogo de adivinhação (30 moedas)")
 async def adivinha(interaction: discord.Interaction, numero: int):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     user_id = str(interaction.user.id)
     
     if user_id not in bot.user_balances or bot.user_balances[user_id] < 30:
@@ -1627,7 +2087,7 @@ async def calcular(interaction: discord.Interaction, num1: float, operador: str,
 async def ola_mundo(interaction: discord.Interaction):
     await interaction.response.send_message(f"Olá {interaction.user.mention}! Bem-vindo ao bot Fort! 🎉")
 
-# ==================== COMANDOS DE DIVERSÃO (ANTIGOS) ====================
+# ==================== COMANDOS DE DIVERSÃO ====================
 
 @bot.tree.command(name="8ball", description="🎱 Pergunte ao destino")
 async def eight_ball(interaction: discord.Interaction, pergunta: str):
@@ -1741,10 +2201,14 @@ gifs_matar = [
     "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif"
 ]
 
-# ===== NOVOS COMANDOS DE INTERAÇÃO COM GIF =====
+# ===== COMANDOS DE INTERAÇÃO COM GIF =====
 
 @bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
 async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode se abraçar! 🥲")
         return
@@ -1762,6 +2226,10 @@ async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="beijo_gif", description="💋 Beijar alguém com GIF")
 async def beijo_gif(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode se beijar! 🥲")
         return
@@ -1779,6 +2247,10 @@ async def beijo_gif(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="carinho_gif", description="🥰 Fazer carinho com GIF")
 async def carinho_gif(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode fazer carinho em si mesmo! 🥲")
         return
@@ -1796,6 +2268,10 @@ async def carinho_gif(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="cafune_gif", description="😴 Fazer cafuné com GIF")
 async def cafune_gif(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode fazer cafuné em si mesmo! 🥲")
         return
@@ -1813,6 +2289,10 @@ async def cafune_gif(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="tapa", description="👋 Dar um tapa em alguém com GIF")
 async def tapa(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode se bater! 🥲")
         return
@@ -1830,6 +2310,10 @@ async def tapa(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="festa", description="🎉 Fazer uma festa com GIF")
 async def festa(interaction: discord.Interaction, membro: Optional[discord.Member] = None):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     gif = random.choice(gifs_festa)
     
     if membro:
@@ -1851,6 +2335,10 @@ async def festa(interaction: discord.Interaction, membro: Optional[discord.Membe
 
 @bot.tree.command(name="matar", description="💀 Matar alguém (brincadeira) com GIF")
 async def matar(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     if membro == interaction.user:
         await interaction.response.send_message("❌ Você não pode se matar! 😱")
         return
@@ -1868,6 +2356,10 @@ async def matar(interaction: discord.Interaction, membro: discord.Member):
 
 @bot.tree.command(name="chifre", description="🦌 Dar chifre em alguém")
 async def chifre(interaction: discord.Interaction, membro: discord.Member):
+    if not BOT_CONFIG["sistemas_ativos"]["gifs"]:
+        await interaction.response.send_message("❌ Sistema de GIFs está desativado!", ephemeral=True)
+        return
+    
     embed = discord.Embed(
         title="🦌 CHIFRE!",
         description=f"{interaction.user.mention} deu chifre em {membro.mention}!",
@@ -1877,16 +2369,24 @@ async def chifre(interaction: discord.Interaction, membro: discord.Member):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== OUTRAS FUNÇÕES LEGAIS ====================
+# ==================== OUTRAS FUNÇÕES ====================
 
 @bot.tree.command(name="moeda", description="🪙 Jogar uma moeda")
 async def moeda(interaction: discord.Interaction):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     resultado = random.choice(["CARA", "COROA"])
     await interaction.response.send_message(f"🪙 A moeda caiu: **{resultado}**!")
 
 @bot.tree.command(name="rps", description="🗿 Pedra, Papel ou Tesoura contra o bot")
 @app_commands.describe(escolha="Sua escolha")
 async def rps(interaction: discord.Interaction, escolha: str):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     escolhas = ["pedra", "papel", "tesoura"]
     if escolha.lower() not in escolhas:
         await interaction.response.send_message("❌ Escolha: pedra, papel ou tesoura!")
@@ -1923,6 +2423,10 @@ async def rps(interaction: discord.Interaction, escolha: str):
     faces="Número de faces (ex: 20)"
 )
 async def dado_rpg(interaction: discord.Interaction, quantidade: int = 1, faces: int = 20):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     if quantidade < 1 or quantidade > 10:
         await interaction.response.send_message("❌ Quantidade deve ser entre 1 e 10!")
         return
@@ -1953,6 +2457,10 @@ async def dado_rpg(interaction: discord.Interaction, quantidade: int = 1, faces:
 @bot.tree.command(name="sortear", description="🎁 Sortear um membro do servidor")
 @app_commands.describe(cargo="Cargo específico para sortear (opcional)")
 async def sortear(interaction: discord.Interaction, cargo: Optional[discord.Role] = None):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     if cargo:
         membros = [m for m in cargo.members if not m.bot]
         if not membros:
@@ -1984,6 +2492,10 @@ async def enquete(
     opcao3: str = None,
     opcao4: str = None
 ):
+    if not BOT_CONFIG["sistemas_ativos"]["jogos"]:
+        await interaction.response.send_message("❌ Sistema de jogos está desativado!", ephemeral=True)
+        return
+    
     emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
     opcoes = [opcao1, opcao2]
     
@@ -2010,14 +2522,19 @@ async def enquete(
     for i in range(len(opcoes)):
         await message.add_reaction(emojis[i])
 
-# ==================== COMANDO DE AJUDA ATUALIZADO ====================
+# ==================== COMANDO DE AJUDA ====================
 
 @bot.tree.command(name="ajuda", description="📚 Todos os comandos")
 async def ajuda(interaction: discord.Interaction):
+    sistemas_ativos = []
+    for sistema, ativo in BOT_CONFIG["sistemas_ativos"].items():
+        if ativo:
+            sistemas_ativos.append(sistema.capitalize())
+    
     embed = discord.Embed(
-        title="📚 Comandos do Bot Fort",
-        description="**Sistema Completo - 70+ COMANDOS!**",
-        color=discord.Color.blue()
+        title=f"📚 Comandos do {BOT_CONFIG['nome']}",
+        description=f"**Sistema Completo - 70+ COMANDOS!**\n\nSistemas ativos: {', '.join(sistemas_ativos)}",
+        color=discord.Color.from_str(BOT_CONFIG['cor_embed'])
     )
     
     embed.add_field(
@@ -2123,7 +2640,13 @@ async def ajuda(interaction: discord.Interaction):
         inline=True
     )
     
-    embed.set_footer(text="Total: 70+ comandos! Use / antes de cada comando")
+    embed.add_field(
+        name="⚙️ **CONFIGURAÇÃO**",
+        value="`/config` - Menu de configuração do bot (admin)",
+        inline=True
+    )
+    
+    embed.set_footer(text=f"Total: 70+ comandos! Use / antes de cada comando")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     await interaction.response.send_message(embed=embed)
@@ -2160,19 +2683,25 @@ def run_bot():
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA")
+    print(f"🚀 INICIANDO {BOT_CONFIG['nome']} - VERSÃO COMPLETA")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
+    print("✅ Sistema de Configuração Local (/config)")
     print("✅ Sistema de Chamadas (com decoração perfeita)")
     print("✅ Timing INTELIGENTE: se não colocar horas, vence meia-noite")
     print("✅ Pode escolher quantas horas dura (horas_duracao)")
-    print("✅ O horário da chamada é o que você digitar em data_hora")
     print("✅ Sistema de Ship (likes, ranking)")
     print("✅ Sistema de Casamento (com economia)")
     print("✅ Sistema de Presentes e Signos")
     print("✅ Sistema de Economia (daily, slots)")
     print("✅ Comandos com GIF (abraço, beijo, etc)")
     print("✅ 70+ COMANDOS NO TOTAL!")
+    print("="*60)
+    print(f"\n📝 Configurações atuais:")
+    print(f"📝 Nome: {BOT_CONFIG['nome']}")
+    print(f"📊 Status: {BOT_CONFIG['status']}")
+    print(f"🎨 Cor: {BOT_CONFIG['cor_embed']}")
+    print(f"⚙️ Atividade: {BOT_CONFIG['atividade_tipo']}")
     print("="*60)
     
     run_bot()
