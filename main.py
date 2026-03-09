@@ -227,20 +227,27 @@ def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
     """
     Calcula o tempo de expiração da chamada:
     - Se horas_limite for fornecido: expira após X horas
-    - Se não for fornecido: expira à meia-noite
+    - Se não for fornecido: expira à meia-noite (23:59:59)
     """
     agora = datetime.now()
     
     if horas_limite is not None and horas_limite > 0:
         # Expira após X horas
-        return agora + timedelta(hours=horas_limite)
+        expira_em = agora + timedelta(hours=horas_limite)
+        print(f"⏰ Chamada com duração de {horas_limite}h: expira às {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+        return expira_em
     else:
-        # Expira à meia-noite de hoje
+        # CRIA MEIA-NOITE DO DIA ATUAL (23:59:59)
         meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
         
         # Se já passou da meia-noite de hoje, vai para amanhã
         if agora > meia_noite:
             meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
+            print(f"🌙 Já passou da meia-noite, ajustando para amanhã: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
+        else:
+            print(f"🌙 Meia-noite de hoje: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
+        
+        print(f"⏳ Tempo restante até meia-noite: {meia_noite - agora}")
         
         return meia_noite
 
@@ -303,6 +310,12 @@ class CallButton(Button):
                         
                         data_atual = datetime.now().strftime("%d.%m")
                         
+                        # Define o texto do timing
+                        if call.get('horas_duracao'):
+                            timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s)"
+                        else:
+                            timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
+                        
                         descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
 ५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
@@ -323,6 +336,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
 ५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
 ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
 
+**{timing_text}**
 **✅ PRESENTES: {len(bot.call_participants[call_id])}**"""
                         
                         embed = discord.Embed(
@@ -379,6 +393,96 @@ class CallView(View):
         super().__init__(timeout=None)
         self.add_item(CallButton(call_id, emoji, expira_em))
 
+async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
+    """Encerra a chamada após o tempo limite"""
+    try:
+        print(f"⏰ Iniciando contador para chamada {call_id}")
+        print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+        
+        while True:
+            agora = datetime.now()
+            tempo_restante = (expira_em - agora).total_seconds()
+            
+            if tempo_restante <= 0:
+                print(f"✅ Tempo esgotado para chamada {call_id}")
+                break
+            
+            print(f"⏳ Chamada {call_id}: {tempo_restante:.0f}s restantes")
+            
+            # Espera até o momento da expiração (máximo 30 minutos por vez)
+            espera = min(tempo_restante, 1800)  # 30 minutos
+            await asyncio.sleep(espera)
+        
+        # ENCERRA A CHAMADA
+        if call_id not in bot.call_data:
+            print(f"❌ Chamada {call_id} não encontrada para encerrar")
+            return
+        
+        call = bot.call_data[call_id]
+        participantes = bot.call_participants.get(call_id, [])
+        
+        print(f"📊 Encerrando chamada {call_id} com {len(participantes)} participantes")
+        
+        channel = bot.get_channel(int(call['channel_id']))
+        if channel:
+            try:
+                message = await channel.fetch_message(int(call['message_id']))
+                if message:
+                    # Define o texto do motivo do encerramento
+                    if call.get('horas_duracao'):
+                        motivo = f"APÓS {call['horas_duracao']} HORA(S)"
+                    else:
+                        motivo = "À MEIA-NOITE"
+                    
+                    participantes_text = ""
+                    if participantes:
+                        participantes_list = []
+                        for pid in participantes[:20]:  # Limite de 20 para não estourar
+                            member = channel.guild.get_member(int(pid))
+                            if member:
+                                participantes_list.append(f"• {member.mention}")
+                        
+                        if participantes_list:
+                            participantes_text = "\n".join(participantes_list)
+                            if len(participantes) > 20:
+                                participantes_text += f"\n... e mais {len(participantes) - 20}"
+                    else:
+                        participantes_text = "Ninguém compareceu 😢"
+                    
+                    embed_final = discord.Embed(
+                        title=f"📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
+                        description=f"**CHAMADA ENCERRADA {motivo}**\n\nTotal de presentes: **{len(participantes)}**",
+                        color=discord.Color.dark_gray()
+                    )
+                    
+                    embed_final.add_field(
+                        name="✅ LISTA FINAL",
+                        value=participantes_text[:1024],  # Limite do Discord
+                        inline=False
+                    )
+                    
+                    embed_final.set_footer(text=f"Encerrada em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                    embed_final.timestamp = datetime.now()
+                    
+                    await message.edit(embed=embed_final, view=None)
+                    await channel.send(f"⏰ **Chamada encerrada!** Total de {len(participantes)} presente(s)! 📊")
+                    print(f"✅ Mensagem da chamada {call_id} atualizada")
+            except Exception as e:
+                print(f"❌ Erro ao editar mensagem: {e}")
+        
+        # Limpa os dados
+        if call_id in bot.call_data:
+            del bot.call_data[call_id]
+        if call_id in bot.call_participants:
+            del bot.call_participants[call_id]
+        bot.save_data()
+        
+        print(f"✅ Chamada {call_id} encerrada com sucesso!")
+        
+    except Exception as e:
+        print(f"❌ Erro ao encerrar chamada: {e}")
+        traceback.print_exc()
+
 @bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone)")
 @app_commands.describe(
     titulo="Título do evento",
@@ -407,14 +511,27 @@ async def chamada(
     
     # Calcula tempo de expiração baseado na escolha do usuário
     expira_em = calcular_tempo_expiracao(horas_duracao)
+    
+    # VERIFICAÇÃO: Se for meia-noite e já passou, ajusta para amanhã
+    agora = datetime.now()
+    if expira_em <= agora:
+        if horas_duracao:
+            # Se passou do tempo com horas definidas, adiciona mais 1 hora
+            expira_em = agora + timedelta(hours=1)
+            print(f"⚠️ Tempo já passou, ajustando para +1h: {expira_em}")
+        else:
+            # Se for meia-noite e já passou, vai para amanhã
+            expira_em = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
+            print(f"⚠️ Meia-noite já passou, ajustando para amanhã: {expira_em}")
+    
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
     data_atual = datetime.now().strftime("%d.%m")
     
     # Texto do timing para mostrar no embed
     if horas_duracao:
-        timing_text = f"⏰ Expira em {horas_duracao} hora(s)"
+        timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
     else:
-        timing_text = "🌙 Expira à meia-noite"
+        timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
     
     # Monta o embed com a decoração
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
@@ -437,7 +554,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
 ५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
 ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
 
-**⏰ {timing_text}**
+**{timing_text}**
 **✅ PRESENTES: 0**"""
     
     embed = discord.Embed(
@@ -489,9 +606,9 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     # Mensagem de confirmação
     if horas_duracao:
-        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s)"
+        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
     else:
-        confirm_msg = "🌙 Expira à meia-noite"
+        confirm_msg = f"🌙 Expira à meia-noite (hoje às 23:59)"
     
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
@@ -505,72 +622,25 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
         inline=False
     )
     
+    embed_confirm.add_field(
+        name="📅 Data/Hora da chamada",
+        value=data_hora,
+        inline=True
+    )
+    
+    embed_confirm.add_field(
+        name="⏱️ Expira em",
+        value=expira_em.strftime("%d/%m/%Y %H:%M"),
+        inline=True
+    )
+    
     await interaction.followup.send(embed=embed_confirm, ephemeral=True)
     
     # Agenda o encerramento
     asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
-
-async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
-    """Encerra a chamada após o tempo limite"""
-    agora = datetime.now()
-    tempo_espera = (expira_em - agora).total_seconds()
     
-    if tempo_espera > 0:
-        await asyncio.sleep(tempo_espera)
-    
-    if call_id not in bot.call_data:
-        return
-    
-    try:
-        call = bot.call_data[call_id]
-        participantes = bot.call_participants.get(call_id, [])
-        
-        channel = bot.get_channel(int(call['channel_id']))
-        if channel:
-            message = await channel.fetch_message(int(call['message_id']))
-            if message:
-                participantes_text = ""
-                if participantes:
-                    participantes_list = []
-                    for pid in participantes:
-                        member = channel.guild.get_member(int(pid))
-                        if member:
-                            participantes_list.append(f"• {member.mention}")
-                    
-                    if participantes_list:
-                        if len(participantes_list) <= 20:
-                            participantes_text = "\n".join(participantes_list)
-                        else:
-                            participantes_text = "\n".join(participantes_list[:20])
-                            participantes_text += f"\n... e mais {len(participantes_list) - 20} pessoa(s)"
-                else:
-                    participantes_text = "Ninguém compareceu 😢"
-                
-                # Define o texto do motivo do encerramento
-                if call.get('horas_duracao'):
-                    motivo = f"APÓS {call['horas_duracao']} HORA(S)"
-                else:
-                    motivo = "À MEIA-NOITE"
-                
-                embed_final = discord.Embed(
-                    title=f"📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
-                    description=f"**CHAMADA ENCERRADA {motivo}**\n\nTotal de presentes: **{len(participantes)}**",
-                    color=discord.Color.dark_gray()
-                )
-                
-                embed_final.add_field(
-                    name="✅ LISTA FINAL",
-                    value=participantes_text,
-                    inline=False
-                )
-                
-                embed_final.set_footer(text="Chamada encerrada automaticamente")
-                embed_final.timestamp = datetime.now()
-                
-                await message.edit(embed=embed_final, view=None)
-                await channel.send(f"⏰ **Chamada encerrada!** Total de {len(participantes)} presente(s)!")
-    except Exception as e:
-        print(f"Erro ao encerrar chamada: {e}")
+    print(f"✅ Chamada criada: {call_id}")
+    print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
 
 @bot.tree.command(name="chamada_info", description="ℹ️ Ver informações de uma chamada")
 async def chamada_info(interaction: discord.Interaction, message_id: str = None):
