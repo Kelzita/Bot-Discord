@@ -1,7 +1,7 @@
 import sys
 import discord
 from discord import app_commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Modal, TextInput
 import random
 import json
 import aiohttp
@@ -14,18 +14,47 @@ import os
 import time
 import logging
 import traceback
+import requests
+from collections import defaultdict
+import re
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# Pega o token das variáveis de ambiente
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # ===== IMPORTS DO SERVIDOR WEB =====
 from flask import Flask, jsonify
 import threading
 
+# ===== IMPORTS PARA MÚSICA =====
+import yt_dlp as youtube_dl
+import urllib.parse
+import urllib.request
+
 # Configurar encoding e logging
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO)
+
+# ===== CONFIGURAÇÕES =====
+YTDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'extractaudio': True,
+    'audioformat': 'mp3',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+}
+
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
 
 # ===== SERVIDOR WEB =====
 app = Flask(__name__)
@@ -35,7 +64,7 @@ def home():
     return jsonify({
         "status": "online",
         "bot": "Fort Bot",
-        "sistemas": 70
+        "sistemas": 90
     })
 
 @app.route('/health')
@@ -48,27 +77,26 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - usa a porta do ambiente"""
-    # No Vercel, a porta é fornecida pela variável PORT
-    port = int(os.environ.get('PORT', 8080))  # 8080 é a padrão do Vercel
+    port = int(os.environ.get('PORT', 8080))
     print(f"📡 Iniciando servidor web na porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
-    """Mantém o bot vivo"""
     server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
     print(f"✅ Servidor web configurado")
 
+# ===== CLASSE DO BOT PRINCIPAL =====
 class Fort(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
+        intents.voice_states = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         
-        # Sistema de economia e jogos
+        # Sistemas existentes
         self.user_balances = {}
         self.user_inventory = {}
         self.daily_cooldowns = {}
@@ -77,21 +105,50 @@ class Fort(discord.Client):
         self.divorce_cooldowns = {}
         self.anniversary_data = {}
         self.ship_history = {}
-        
-        # Sistema de chamadas
         self.call_data = {}
         self.call_participants = {}
         
-        # Inicializa banco de dados e carrega dados
+        # ===== NOVOS SISTEMAS =====
+        
+        # Sistema de Moderação
+        self.warnings = {}
+        self.muted_roles = {}
+        self.temp_mutes = {}
+        self.locked_channels = set()
+        self.slowmode_channels = {}
+        
+        # Sistema de Música
+        self.voice_clients = {}
+        self.music_queues = {}
+        self.now_playing = {}
+        self.music_loops = {}
+        self.music_volumes = {}
+        
+        # Sistema de Utilidade
+        self.reminders = []
+        self.birthdays = {}
+        self.user_timezones = {}
+        self.saved_messages = {}
+        self.poll_data = {}
+        
+        # Sistema Criativo
+        self.daily_phrases = []
+        self.user_jokes = {}
+        self.fun_facts = []
+        self.horoscope_cache = {}
+        
+        # Inicializa banco de dados
         self.init_database()
         self.load_data()
+        self.load_resources()
     
     # ===== FUNÇÕES SQLITE =====
     def init_database(self):
-        """Cria o banco de dados SQLite"""
+        """Cria o banco de dados SQLite com todas as tabelas"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
+        # Tabelas existentes
         c.execute('''CREATE TABLE IF NOT EXISTS economia
                      (user_id TEXT PRIMARY KEY, saldo INTEGER)''')
         c.execute('''CREATE TABLE IF NOT EXISTS daily_cooldowns
@@ -101,15 +158,132 @@ class Fort(discord.Client):
         c.execute('''CREATE TABLE IF NOT EXISTS dados_json
                      (tipo TEXT PRIMARY KEY, dados TEXT)''')
         
+        # ===== NOVAS TABELAS =====
+        
+        # Tabela de avisos
+        c.execute('''CREATE TABLE IF NOT EXISTS warnings
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id TEXT,
+                      moderator_id TEXT,
+                      reason TEXT,
+                      date TEXT,
+                      guild_id TEXT)''')
+        
+        # Tabela de aniversários
+        c.execute('''CREATE TABLE IF NOT EXISTS birthdays
+                     (user_id TEXT PRIMARY KEY,
+                      day INTEGER,
+                      month INTEGER,
+                      year INTEGER)''')
+        
+        # Tabela de lembretes
+        c.execute('''CREATE TABLE IF NOT EXISTS reminders
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id TEXT,
+                      channel_id TEXT,
+                      message TEXT,
+                      remind_time TEXT,
+                      created_at TEXT)''')
+        
+        # Tabela de timezones
+        c.execute('''CREATE TABLE IF NOT EXISTS timezones
+                     (user_id TEXT PRIMARY KEY,
+                      timezone TEXT)''')
+        
+        # Tabela de músicas favoritas
+        c.execute('''CREATE TABLE IF NOT EXISTS favorite_songs
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id TEXT,
+                      song_title TEXT,
+                      song_url TEXT,
+                      added_date TEXT)''')
+        
+        # Tabela de frases salvas
+        c.execute('''CREATE TABLE IF NOT EXISTS saved_phrases
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id TEXT,
+                      phrase TEXT,
+                      category TEXT,
+                      date TEXT)''')
+        
+        # Tabela de logs de moderação
+        c.execute('''CREATE TABLE IF NOT EXISTS moderation_logs
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      action TEXT,
+                      moderator_id TEXT,
+                      user_id TEXT,
+                      reason TEXT,
+                      date TEXT,
+                      guild_id TEXT)''')
+        
         conn.commit()
         conn.close()
-        print("✅ Banco de dados SQLite inicializado!")
+        print("✅ Banco de dados SQLite atualizado com novas tabelas!")
+    
+    def load_resources(self):
+        """Carrega recursos como frases, fatos, etc"""
+        # Frases motivacionais
+        self.daily_phrases = [
+            "🌅 Acredite em você e tudo será possível!",
+            "💪 Cada dia é uma nova chance para ser feliz!",
+            "🌟 Você é mais forte do que imagina!",
+            "🌈 A vida é feita de pequenas alegrias!",
+            "⭐ Nunca é tarde para recomeçar!",
+            "🌸 Seja a mudança que você quer ver no mundo!",
+            "🦋 Acredite nos seus sonhos!",
+            "🌺 A felicidade está nas pequenas coisas!",
+            "🍀 Hoje será um ótimo dia!",
+            "✨ Você é especial do jeito que é!"
+        ]
+        
+        # Fatos curiosos
+        self.fun_facts = [
+            "🦒 As girafas dormem apenas 30 minutos por dia!",
+            "🐘 Os elefantes são os únicos mamíferos que não podem pular!",
+            "🐧 Os pinguins propõem casamento com uma pedra!",
+            "🦋 As borboletas sentem gosto com os pés!",
+            "🐙 Os polvos têm três corações!",
+            "🦉 As corujas não podem mover os olhos!",
+            "🐫 Os camelos não armazenam água nas corcovas!",
+            "🦔 Ouriços são imunes a veneno de cobra!",
+            "🦩 Flamingos nascem cinzas e ficam rosados!",
+            "🐋 A baleia azul tem coração do tamanho de um carro!"
+        ]
+        
+        # Charadas
+        self.riddles = [
+            {"pergunta": "O que é, o que é? Quanto mais se tira, maior fica?", "resposta": "O buraco"},
+            {"pergunta": "O que é, o que é? Tem cabeça e tem dente, não é bicho e nem gente?", "resposta": "O alho"},
+            {"pergunta": "O que é, o que é? Anda deitado e dorme em pé?", "resposta": "O pé"},
+            {"pergunta": "O que é, o que é? Quanto maior, menos se vê?", "resposta": "A escuridão"},
+            {"pergunta": "O que é, o que é? Tem asa mas não voa, tem bico mas não bica?", "resposta": "O bule"},
+            {"pergunta": "O que é, o que é? Dá muitas voltas e não sai do lugar?", "resposta": "O relógio"},
+            {"pergunta": "O que é, o que é? Feito para andar e não anda?", "resposta": "A rua"},
+            {"pergunta": "O que é, o que é? Tem coroa mas não é rei?", "resposta": "O abacaxi"}
+        ]
+        
+        # Piadas
+        self.jokes = [
+            "😂 Por que o computador foi preso? Porque executou um comando!",
+            "😂 O que o zero disse para o oito? Belo cinto!",
+            "😂 Por que os elétrons nunca pagam contas? Porque estão sempre em débito!",
+            "😂 O que o pato disse para a pata? Vem quá!",
+            "😂 Qual o cúmulo da rapidez? Fechar o zíper com uma bala!",
+            "😂 O que é um pontinho amarelo no céu? Um yellowcóptero!",
+            "😂 Por que o livro de matemática está triste? Porque tem muitos problemas!",
+            "😂 O que o tomate foi fazer no banco? Tirar extrato!",
+            "😂 Como o ovo se sente? Ovitado!",
+            "😂 Qual é o café mais forte do mundo? O café com leão!"
+        ]
+        
+        print("✅ Recursos carregados (frases, fatos, piadas, charadas)!")
     
     def load_data(self):
         """Carrega dados do SQLite"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
+        # Dados existentes
         c.execute('SELECT user_id, saldo FROM economia')
         self.user_balances = {user_id: saldo for user_id, saldo in c.fetchall()}
         
@@ -139,42 +313,51 @@ class Fort(discord.Client):
             elif tipo == 'call_participants':
                 self.call_participants = dados
         
+        # ===== CARREGAR NOVOS DADOS =====
+        
+        # Carregar warnings
+        c.execute('SELECT user_id, moderator_id, reason, date, guild_id FROM warnings')
+        for user_id, mod_id, reason, date, guild_id in c.fetchall():
+            if guild_id not in self.warnings:
+                self.warnings[guild_id] = {}
+            if user_id not in self.warnings[guild_id]:
+                self.warnings[guild_id][user_id] = []
+            
+            self.warnings[guild_id][user_id].append({
+                'moderator_id': mod_id,
+                'reason': reason,
+                'date': date
+            })
+        
+        # Carregar aniversários
+        c.execute('SELECT user_id, day, month, year FROM birthdays')
+        for user_id, day, month, year in c.fetchall():
+            self.birthdays[user_id] = {'day': day, 'month': month, 'year': year}
+        
+        # Carregar lembretes
+        c.execute('SELECT id, user_id, channel_id, message, remind_time FROM reminders')
+        for rid, user_id, channel_id, message, remind_time in c.fetchall():
+            self.reminders.append({
+                'id': rid,
+                'user_id': user_id,
+                'channel_id': channel_id,
+                'message': message,
+                'remind_time': datetime.fromisoformat(remind_time)
+            })
+        
+        # Carregar timezones
+        c.execute('SELECT user_id, timezone FROM timezones')
+        self.user_timezones = {user_id: tz for user_id, tz in c.fetchall()}
+        
         conn.close()
-        self.import_from_json_if_empty()
-    
-    def import_from_json_if_empty(self):
-        if not self.user_balances:
-            try:
-                arquivos = ['economy.json', 'inventory.json', 'ships.json', 'marriages.json', 
-                           'anniversary.json', 'ship_history.json', 'calls.json']
-                for arquivo in arquivos:
-                    if os.path.exists(arquivo):
-                        with open(arquivo, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                            if arquivo == 'economy.json':
-                                self.user_balances = data
-                            elif arquivo == 'inventory.json':
-                                self.user_inventory = data
-                            elif arquivo == 'ships.json':
-                                self.ship_data = data
-                            elif arquivo == 'marriages.json':
-                                self.marriage_data = data
-                            elif arquivo == 'anniversary.json':
-                                self.anniversary_data = data
-                            elif arquivo == 'ship_history.json':
-                                self.ship_history = data
-                            elif arquivo == 'calls.json':
-                                self.call_data = data.get('calls', {})
-                                self.call_participants = data.get('participants', {})
-                print("✅ Dados importados dos JSONs!")
-                self.save_data()
-            except Exception as e:
-                print(f"⚠️ Erro ao importar JSONs: {e}")
+        print("✅ Dados carregados do SQLite!")
     
     def save_data(self):
+        """Salva todos os dados no SQLite"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
+        # Dados existentes
         for user_id, saldo in self.user_balances.items():
             c.execute('INSERT OR REPLACE INTO economia VALUES (?, ?)', (user_id, saldo))
         
@@ -199,56 +382,185 @@ class Fort(discord.Client):
             c.execute('INSERT OR REPLACE INTO dados_json VALUES (?, ?)', 
                      (tipo, json.dumps(dados, ensure_ascii=False)))
         
+        # Salvar warnings
+        c.execute('DELETE FROM warnings')
+        for guild_id, guild_warnings in self.warnings.items():
+            for user_id, warns in guild_warnings.items():
+                for warn in warns:
+                    c.execute('''INSERT INTO warnings 
+                               (user_id, moderator_id, reason, date, guild_id) 
+                               VALUES (?, ?, ?, ?, ?)''',
+                            (user_id, warn['moderator_id'], warn['reason'], 
+                             warn['date'], guild_id))
+        
+        # Salvar aniversários
+        c.execute('DELETE FROM birthdays')
+        for user_id, data in self.birthdays.items():
+            c.execute('INSERT INTO birthdays VALUES (?, ?, ?, ?)',
+                     (user_id, data['day'], data['month'], data.get('year', 0)))
+        
+        # Salvar timezones
+        c.execute('DELETE FROM timezones')
+        for user_id, tz in self.user_timezones.items():
+            c.execute('INSERT INTO timezones VALUES (?, ?)', (user_id, tz))
+        
+        # Limpar lembretes antigos
+        c.execute('DELETE FROM reminders WHERE remind_time < ?', 
+                 (datetime.now().isoformat(),))
+        
+        # Salvar lembretes ativos
+        for reminder in self.reminders:
+            if reminder['remind_time'] > datetime.now():
+                c.execute('''INSERT OR REPLACE INTO reminders 
+                           (id, user_id, channel_id, message, remind_time, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?)''',
+                        (reminder['id'], reminder['user_id'], reminder['channel_id'],
+                         reminder['message'], reminder['remind_time'].isoformat(),
+                         datetime.now().isoformat()))
+        
         conn.commit()
         conn.close()
 
     async def setup_hook(self):
         await self.tree.sync()
         print(f"✅ Comandos sincronizados!")
+        
+        # Iniciar tarefas de background
+        self.loop.create_task(self.check_reminders())
+        self.loop.create_task(self.check_birthdays())
+        self.loop.create_task(self.check_temp_mutes())
 
     async def on_ready(self):
         print(f"✅ Bot {self.user} ligado com sucesso!")
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
-        print(f"📢 Sistema de Chamadas: ATIVO (timing opcional)")
-        print(f"💖 Sistema de Ship: ATIVO")
-        print(f"💒 Sistema de Casamento: ATIVO")
-        print(f"💰 Sistema de Economia: ATIVO")
-        print(f"🎮 Sistema de Jogos: ATIVO")
-        print(f"🎭 Comandos com GIF: ATIVO")
-        print(f"💾 Banco de Dados: SQLite")
-        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 70+ comandos!"))
+        print("\n📢 SISTEMAS CARREGADOS:")
+        print("✅ Sistema de Chamadas")
+        print("✅ Sistema de Ship e Casamento")
+        print("✅ Sistema de Economia e Jogos")
+        print("✅ Sistema de Moderação")
+        print("✅ Sistema de Música")
+        print("✅ Sistema de Utilidade")
+        print("✅ Sistema Criativo")
+        print("✅ Sistema de Aniversários e Lembretes")
+        print(f"🎵 Comandos totais: 100+")
+        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 100+ comandos!"))
+    
+    # ===== TAREFAS DE BACKGROUND =====
+    
+    async def check_reminders(self):
+        """Verifica lembretes a cada minuto"""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                agora = datetime.now()
+                to_remove = []
+                
+                for reminder in self.reminders:
+                    if reminder['remind_time'] <= agora:
+                        channel = self.get_channel(int(reminder['channel_id']))
+                        if channel:
+                            user = self.get_user(int(reminder['user_id']))
+                            if user:
+                                embed = discord.Embed(
+                                    title="⏰ LEMBRETE!",
+                                    description=reminder['message'],
+                                    color=discord.Color.gold()
+                                )
+                                embed.set_footer(text=f"Lembrete para {user.name}")
+                                
+                                await channel.send(content=user.mention, embed=embed)
+                        
+                        to_remove.append(reminder)
+                
+                for reminder in to_remove:
+                    self.reminders.remove(reminder)
+                
+                if to_remove:
+                    self.save_data()
+                
+            except Exception as e:
+                print(f"Erro no check_reminders: {e}")
+            
+            await asyncio.sleep(60)  # Verifica a cada minuto
+    
+    async def check_birthdays(self):
+        """Verifica aniversários uma vez por dia"""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                agora = datetime.now()
+                
+                # Verifica à meia-noite
+                if agora.hour == 0 and agora.minute == 0:
+                    for user_id, data in self.birthdays.items():
+                        if data['month'] == agora.month and data['day'] == agora.day:
+                            # Encontra servidores onde o usuário está
+                            for guild in self.guilds:
+                                member = guild.get_member(int(user_id))
+                                if member:
+                                    # Envia mensagem no sistema ou canal geral
+                                    channel = discord.utils.get(guild.text_channels, name="geral")
+                                    if channel:
+                                        anos = agora.year - data.get('year', agora.year)
+                                        embed = discord.Embed(
+                                            title="🎂 FELIZ ANIVERSÁRIO!",
+                                            description=f"Hoje é aniversário de {member.mention}!",
+                                            color=discord.Color.gold()
+                                        )
+                                        if anos > 0:
+                                            embed.add_field(name="🎉 Idade", value=f"{anos} anos")
+                                        
+                                        await channel.send(embed=embed)
+            
+            except Exception as e:
+                print(f"Erro no check_birthdays: {e}")
+            
+            await asyncio.sleep(3600)  # Verifica a cada hora
+    
+    async def check_temp_mutes(self):
+        """Verifica mutes temporários"""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                agora = datetime.now()
+                to_remove = []
+                
+                for user_id, data in self.temp_mutes.items():
+                    if data['until'] <= agora:
+                        guild = self.get_guild(int(data['guild_id']))
+                        if guild:
+                            member = guild.get_member(int(user_id))
+                            if member:
+                                muted_role = discord.utils.get(guild.roles, name="Silenciado")
+                                if muted_role and muted_role in member.roles:
+                                    await member.remove_roles(muted_role, reason="Tempo de mute expirado")
+                        
+                        to_remove.append(user_id)
+                
+                for user_id in to_remove:
+                    del self.temp_mutes[user_id]
+                
+            except Exception as e:
+                print(f"Erro no check_temp_mutes: {e}")
+            
+            await asyncio.sleep(60)
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS COM TIMING INTELIGENTE ====================
+# ===== SISTEMA DE CHAMADAS (existente, mantido) =====
+# [Todo o código de chamadas permanece igual]
 
 def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
-    """
-    Calcula o tempo de expiração da chamada:
-    - Se horas_limite for fornecido: expira após X horas
-    - Se não for fornecido: expira à meia-noite (23:59:59)
-    """
     agora = datetime.now()
     
     if horas_limite is not None and horas_limite > 0:
-        # Expira após X horas
         expira_em = agora + timedelta(hours=horas_limite)
-        print(f"⏰ Chamada com duração de {horas_limite}h: expira às {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
         return expira_em
     else:
-        # CRIA MEIA-NOITE DO DIA ATUAL (23:59:59)
         meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
-        
-        # Se já passou da meia-noite de hoje, vai para amanhã
         if agora > meia_noite:
             meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-            print(f"🌙 Já passou da meia-noite, ajustando para amanhã: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
-        else:
-            print(f"🌙 Meia-noite de hoje: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
-        
-        print(f"⏳ Tempo restante até meia-noite: {meia_noite - agora}")
-        
         return meia_noite
 
 class CallButton(Button):
@@ -310,7 +622,6 @@ class CallButton(Button):
                         
                         data_atual = datetime.now().strftime("%d.%m")
                         
-                        # Define o texto do timing
                         if call.get('horas_duracao'):
                             timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s)"
                         else:
@@ -396,39 +707,27 @@ class CallView(View):
 async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
     """Encerra a chamada após o tempo limite"""
     try:
-        print(f"⏰ Iniciando contador para chamada {call_id}")
-        print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
-        
         while True:
             agora = datetime.now()
             tempo_restante = (expira_em - agora).total_seconds()
             
             if tempo_restante <= 0:
-                print(f"✅ Tempo esgotado para chamada {call_id}")
                 break
             
-            print(f"⏳ Chamada {call_id}: {tempo_restante:.0f}s restantes")
-            
-            # Espera até o momento da expiração (máximo 30 minutos por vez)
-            espera = min(tempo_restante, 1800)  # 30 minutos
+            espera = min(tempo_restante, 1800)
             await asyncio.sleep(espera)
         
-        # ENCERRA A CHAMADA
         if call_id not in bot.call_data:
-            print(f"❌ Chamada {call_id} não encontrada para encerrar")
             return
         
         call = bot.call_data[call_id]
         participantes = bot.call_participants.get(call_id, [])
-        
-        print(f"📊 Encerrando chamada {call_id} com {len(participantes)} participantes")
         
         channel = bot.get_channel(int(call['channel_id']))
         if channel:
             try:
                 message = await channel.fetch_message(int(call['message_id']))
                 if message:
-                    # Define o texto do motivo do encerramento
                     if call.get('horas_duracao'):
                         motivo = f"APÓS {call['horas_duracao']} HORA(S)"
                     else:
@@ -437,7 +736,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     participantes_text = ""
                     if participantes:
                         participantes_list = []
-                        for pid in participantes[:20]:  # Limite de 20 para não estourar
+                        for pid in participantes[:20]:
                             member = channel.guild.get_member(int(pid))
                             if member:
                                 participantes_list.append(f"• {member.mention}")
@@ -457,7 +756,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     
                     embed_final.add_field(
                         name="✅ LISTA FINAL",
-                        value=participantes_text[:1024],  # Limite do Discord
+                        value=participantes_text[:1024],
                         inline=False
                     )
                     
@@ -466,22 +765,17 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     
                     await message.edit(embed=embed_final, view=None)
                     await channel.send(f"⏰ **Chamada encerrada!** Total de {len(participantes)} presente(s)! 📊")
-                    print(f"✅ Mensagem da chamada {call_id} atualizada")
             except Exception as e:
                 print(f"❌ Erro ao editar mensagem: {e}")
         
-        # Limpa os dados
         if call_id in bot.call_data:
             del bot.call_data[call_id]
         if call_id in bot.call_participants:
             del bot.call_participants[call_id]
         bot.save_data()
         
-        print(f"✅ Chamada {call_id} encerrada com sucesso!")
-        
     except Exception as e:
         print(f"❌ Erro ao encerrar chamada: {e}")
-        traceback.print_exc()
 
 @bot.tree.command(name="chamada", description="📢 Criar uma chamada (@everyone)")
 @app_commands.describe(
@@ -505,35 +799,23 @@ async def chamada(
         await interaction.response.send_message("❌ Você precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
     
-    if not interaction.guild.me.guild_permissions.mention_everyone:
-        await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
-        return
-    
-    # Calcula tempo de expiração baseado na escolha do usuário
     expira_em = calcular_tempo_expiracao(horas_duracao)
     
-    # VERIFICAÇÃO: Se for meia-noite e já passou, ajusta para amanhã
     agora = datetime.now()
     if expira_em <= agora:
         if horas_duracao:
-            # Se passou do tempo com horas definidas, adiciona mais 1 hora
             expira_em = agora + timedelta(hours=1)
-            print(f"⚠️ Tempo já passou, ajustando para +1h: {expira_em}")
         else:
-            # Se for meia-noite e já passou, vai para amanhã
             expira_em = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-            print(f"⚠️ Meia-noite já passou, ajustando para amanhã: {expira_em}")
     
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
     data_atual = datetime.now().strftime("%d.%m")
     
-    # Texto do timing para mostrar no embed
     if horas_duracao:
         timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
     else:
         timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
     
-    # Monta o embed com a decoração
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
 ५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
@@ -604,12 +886,6 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     bot.call_participants[call_id] = []
     bot.save_data()
     
-    # Mensagem de confirmação
-    if horas_duracao:
-        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
-    else:
-        confirm_msg = f"🌙 Expira à meia-noite (hoje às 23:59)"
-    
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
         description=f"**{titulo}** criada com sucesso!",
@@ -618,7 +894,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     embed_confirm.add_field(
         name="⏰ Timing",
-        value=confirm_msg,
+        value=timing_text,
         inline=False
     )
     
@@ -636,11 +912,9 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     await interaction.followup.send(embed=embed_confirm, ephemeral=True)
     
-    # Agenda o encerramento
     asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
     
     print(f"✅ Chamada criada: {call_id}")
-    print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
 
 @bot.tree.command(name="chamada_info", description="ℹ️ Ver informações de uma chamada")
 async def chamada_info(interaction: discord.Interaction, message_id: str = None):
@@ -802,7 +1076,8 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
     bot.save_data()
     await interaction.response.send_message("✅ Chamada cancelada!", ephemeral=True)
 
-# ==================== SISTEMA DE SHIP COMPLETO ====================
+# ===== SISTEMA DE SHIP E CASAMENTO (mantido do original) =====
+# [Todo o código de ship e casamento permanece igual]
 
 @bot.tree.command(name="ship", description="💖 Calcula o amor entre duas pessoas")
 async def ship(interaction: discord.Interaction, pessoa1: discord.Member, pessoa2: discord.Member):
@@ -1045,7 +1320,7 @@ async def calcular_amor(interaction: discord.Interaction, pessoa1: discord.Membe
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== SISTEMA DE CASAMENTO ====================
+# ===== SISTEMA DE CASAMENTO (mantido do original) =====
 
 @bot.tree.command(name="pedir", description="💍 Pedir em casamento (2000 moedas)")
 async def pedir(interaction: discord.Interaction, pessoa: discord.Member):
@@ -1325,7 +1600,7 @@ async def luademel(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== SISTEMA DE SIGNOS E PRESENTES ====================
+# ===== SISTEMA DE SIGNOS E PRESENTES (mantido do original) =====
 
 @bot.tree.command(name="signos", description="♈ Compatibilidade de signos")
 async def signos(interaction: discord.Interaction, signo1: str, signo2: str):
@@ -1422,7 +1697,7 @@ async def meuspresentes(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# ==================== SISTEMA DE ECONOMIA ====================
+# ===== SISTEMA DE ECONOMIA (mantido do original) =====
 
 @bot.tree.command(name="daily", description="💰 Recompensa diária")
 async def daily(interaction: discord.Interaction):
@@ -1623,7 +1898,1220 @@ async def adivinha(interaction: discord.Interaction, numero: int):
     
     await interaction.response.send_message(f"🔢 {msg}\n💰 Saldo: {bot.user_balances[user_id]}")
 
-# ==================== COMANDOS BÁSICOS ====================
+# ===== SISTEMA DE MODERAÇÃO (NOVO) =====
+
+@bot.tree.command(name="clear", description="🧹 Limpar mensagens do canal")
+@app_commands.describe(quantidade="Número de mensagens para apagar (1-100)")
+@app_commands.default_permissions(manage_messages=True)
+async def clear(interaction: discord.Interaction, quantidade: int):
+    if quantidade < 1 or quantidade > 100:
+        await interaction.response.send_message("❌ Quantidade deve ser entre 1 e 100!")
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        deleted = await interaction.channel.purge(limit=quantidade)
+        await interaction.followup.send(f"🧹 **{len(deleted)}** mensagens apagadas!", ephemeral=True)
+        
+        # Log da ação
+        embed = discord.Embed(
+            title="🧹 Mensagens Apagadas",
+            description=f"**Canal:** {interaction.channel.mention}\n**Quantidade:** {len(deleted)}\n**Moderador:** {interaction.user.mention}",
+            color=discord.Color.orange(),
+            timestamp=datetime.now()
+        )
+        
+        # Tenta enviar para canal de logs
+        log_channel = discord.utils.get(interaction.guild.text_channels, name="logs")
+        if log_channel:
+            await log_channel.send(embed=embed)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ Erro ao limpar mensagens: {e}", ephemeral=True)
+
+@bot.tree.command(name="kick", description="👢 Expulsar membro do servidor")
+@app_commands.describe(membro="Membro a ser expulso", motivo="Motivo da expulsão")
+@app_commands.default_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Não especificado"):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se expulsar!", ephemeral=True)
+        return
+    
+    if membro.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
+        await interaction.response.send_message("❌ Você não pode expulsar alguém com cargo maior ou igual ao seu!", ephemeral=True)
+        return
+    
+    try:
+        # Tenta enviar DM
+        embed_dm = discord.Embed(
+            title="👢 Você foi expulso!",
+            description=f"**Servidor:** {interaction.guild.name}\n**Motivo:** {motivo}",
+            color=discord.Color.red()
+        )
+        await membro.send(embed=embed_dm)
+    except:
+        pass
+    
+    await membro.kick(reason=motivo)
+    
+    embed = discord.Embed(
+        title="👢 Membro Expulso",
+        description=f"**Membro:** {membro.mention} ({membro.id})\n**Motivo:** {motivo}\n**Moderador:** {interaction.user.mention}",
+        color=discord.Color.red(),
+        timestamp=datetime.now()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+    
+    # Log
+    log_channel = discord.utils.get(interaction.guild.text_channels, name="logs")
+    if log_channel:
+        await log_channel.send(embed=embed)
+
+@bot.tree.command(name="ban", description="🔨 Banir membro do servidor")
+@app_commands.describe(membro="Membro a ser banido", motivo="Motivo do banimento", dias_mensagens="Dias de mensagens para apagar")
+@app_commands.default_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, membro: discord.Member, motivo: str = "Não especificado", dias_mensagens: int = 0):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se banir!", ephemeral=True)
+        return
+    
+    if membro.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
+        await interaction.response.send_message("❌ Você não pode banir alguém com cargo maior ou igual ao seu!", ephemeral=True)
+        return
+    
+    try:
+        embed_dm = discord.Embed(
+            title="🔨 Você foi banido!",
+            description=f"**Servidor:** {interaction.guild.name}\n**Motivo:** {motivo}",
+            color=discord.Color.dark_red()
+        )
+        await membro.send(embed=embed_dm)
+    except:
+        pass
+    
+    await membro.ban(reason=motivo, delete_message_days=dias_mensagens)
+    
+    embed = discord.Embed(
+        title="🔨 Membro Banido",
+        description=f"**Membro:** {membro.mention} ({membro.id})\n**Motivo:** {motivo}\n**Moderador:** {interaction.user.mention}",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.now()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+    
+    log_channel = discord.utils.get(interaction.guild.text_channels, name="logs")
+    if log_channel:
+        await log_channel.send(embed=embed)
+
+@bot.tree.command(name="unban", description="🔓 Desbanir usuário")
+@app_commands.describe(user_id="ID do usuário para desbanir")
+@app_commands.default_permissions(ban_members=True)
+async def unban(interaction: discord.Interaction, user_id: str):
+    try:
+        user = await bot.fetch_user(int(user_id))
+        await interaction.guild.unban(user)
+        
+        embed = discord.Embed(
+            title="🔓 Usuário Desbanido",
+            description=f"**Usuário:** {user.mention} ({user.id})\n**Moderador:** {interaction.user.mention}",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except discord.NotFound:
+        await interaction.response.send_message("❌ Usuário não encontrado ou não está banido!", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="timeout", description="⏰ Mutar temporariamente um membro")
+@app_commands.describe(
+    membro="Membro para mutar",
+    duracao="Duração em minutos (máx 40320)",
+    motivo="Motivo do mute"
+)
+@app_commands.default_permissions(moderate_members=True)
+async def timeout(interaction: discord.Interaction, membro: discord.Member, duracao: int, motivo: str = "Não especificado"):
+    if membro == interaction.user:
+        await interaction.response.send_message("❌ Você não pode se mutar!", ephemeral=True)
+        return
+    
+    if membro.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
+        await interaction.response.send_message("❌ Você não pode mutar alguém com cargo maior ou igual ao seu!", ephemeral=True)
+        return
+    
+    if duracao > 40320:  # 28 dias em minutos
+        await interaction.response.send_message("❌ Duração máxima é 40320 minutos (28 dias)!", ephemeral=True)
+        return
+    
+    until = discord.utils.utcnow() + timedelta(minutes=duracao)
+    
+    try:
+        await membro.timeout(until, reason=motivo)
+        
+        embed = discord.Embed(
+            title="⏰ Membro Silenciado",
+            description=f"**Membro:** {membro.mention}\n**Duração:** {duracao} minutos\n**Motivo:** {motivo}\n**Moderador:** {interaction.user.mention}",
+            color=discord.Color.orange(),
+            timestamp=datetime.now()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="untimeout", description="🔊 Remover mute de um membro")
+@app_commands.describe(membro="Membro para desmutar")
+@app_commands.default_permissions(moderate_members=True)
+async def untimeout(interaction: discord.Interaction, membro: discord.Member):
+    try:
+        await membro.timeout(None)
+        
+        embed = discord.Embed(
+            title="🔊 Membro Desmutado",
+            description=f"**Membro:** {membro.mention}\n**Moderador:** {interaction.user.mention}",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="warn", description="⚠️ Avisar um membro")
+@app_commands.describe(membro="Membro para avisar", motivo="Motivo do aviso")
+@app_commands.default_permissions(moderate_members=True)
+async def warn(interaction: discord.Interaction, membro: discord.Member, motivo: str):
+    guild_id = str(interaction.guild.id)
+    user_id = str(membro.id)
+    
+    if guild_id not in bot.warnings:
+        bot.warnings[guild_id] = {}
+    
+    if user_id not in bot.warnings[guild_id]:
+        bot.warnings[guild_id][user_id] = []
+    
+    warn_data = {
+        'moderator_id': str(interaction.user.id),
+        'reason': motivo,
+        'date': datetime.now().isoformat()
+    }
+    
+    bot.warnings[guild_id][user_id].append(warn_data)
+    bot.save_data()
+    
+    warn_count = len(bot.warnings[guild_id][user_id])
+    
+    embed = discord.Embed(
+        title="⚠️ Aviso Registrado",
+        description=f"**Membro:** {membro.mention}\n**Motivo:** {motivo}\n**Total de avisos:** {warn_count}\n**Moderador:** {interaction.user.mention}",
+        color=discord.Color.yellow(),
+        timestamp=datetime.now()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+    
+    try:
+        embed_dm = discord.Embed(
+            title="⚠️ Você recebeu um aviso!",
+            description=f"**Servidor:** {interaction.guild.name}\n**Motivo:** {motivo}\n**Total de avisos:** {warn_count}",
+            color=discord.Color.yellow()
+        )
+        await membro.send(embed=embed_dm)
+    except:
+        pass
+    
+    # Ações automáticas baseadas no número de avisos
+    if warn_count >= 5:
+        try:
+            await membro.ban(reason="5 avisos acumulados")
+            await interaction.channel.send(f"🔨 {membro.mention} foi banido automaticamente por acumular 5 avisos!")
+        except:
+            pass
+    elif warn_count >= 3:
+        try:
+            until = discord.utils.utcnow() + timedelta(hours=24)
+            await membro.timeout(until, reason="3 avisos acumulados")
+            await interaction.channel.send(f"⏰ {membro.mention} foi mutado automaticamente por 24h por acumular 3 avisos!")
+        except:
+            pass
+
+@bot.tree.command(name="warnings", description="📋 Ver avisos de um membro")
+@app_commands.describe(membro="Membro para ver os avisos")
+async def warnings(interaction: discord.Interaction, membro: discord.Member):
+    guild_id = str(interaction.guild.id)
+    user_id = str(membro.id)
+    
+    if guild_id not in bot.warnings or user_id not in bot.warnings[guild_id] or not bot.warnings[guild_id][user_id]:
+        await interaction.response.send_message(f"✅ {membro.mention} não tem nenhum aviso!", ephemeral=True)
+        return
+    
+    warns = bot.warnings[guild_id][user_id]
+    
+    embed = discord.Embed(
+        title=f"📋 Avisos de {membro.display_name}",
+        description=f"Total: **{len(warns)}** aviso(s)",
+        color=discord.Color.orange()
+    )
+    
+    for i, warn in enumerate(warns[-10:], 1):
+        mod = interaction.guild.get_member(int(warn['moderator_id']))
+        data = datetime.fromisoformat(warn['date']).strftime("%d/%m/%Y %H:%M")
+        embed.add_field(
+            name=f"Aviso #{i}",
+            value=f"**Motivo:** {warn['reason']}\n**Moderador:** {mod.mention if mod else 'Desconhecido'}\n**Data:** {data}",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="remove_warn", description="🗑️ Remover um aviso específico")
+@app_commands.describe(membro="Membro", warn_number="Número do aviso (1, 2, 3...)")
+@app_commands.default_permissions(moderate_members=True)
+async def remove_warn(interaction: discord.Interaction, membro: discord.Member, warn_number: int):
+    guild_id = str(interaction.guild.id)
+    user_id = str(membro.id)
+    
+    if guild_id not in bot.warnings or user_id not in bot.warnings[guild_id]:
+        await interaction.response.send_message("❌ Este membro não tem avisos!", ephemeral=True)
+        return
+    
+    warns = bot.warnings[guild_id][user_id]
+    
+    if warn_number < 1 or warn_number > len(warns):
+        await interaction.response.send_message(f"❌ Número inválido! Use entre 1 e {len(warns)}", ephemeral=True)
+        return
+    
+    removed = warns.pop(warn_number - 1)
+    bot.save_data()
+    
+    embed = discord.Embed(
+        title="🗑️ Aviso Removido",
+        description=f"**Membro:** {membro.mention}\n**Motivo removido:** {removed['reason']}\n**Avisos restantes:** {len(warns)}",
+        color=discord.Color.green()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="lock", description="🔒 Trancar um canal")
+@app_commands.describe(canal="Canal para trancar (padrão: atual)")
+@app_commands.default_permissions(manage_channels=True)
+async def lock(interaction: discord.Interaction, canal: Optional[discord.TextChannel] = None):
+    if canal is None:
+        canal = interaction.channel
+    
+    try:
+        overwrite = canal.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await canal.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        
+        embed = discord.Embed(
+            title="🔒 Canal Trancado",
+            description=f"{canal.mention} foi trancado por {interaction.user.mention}",
+            color=discord.Color.red()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="unlock", description="🔓 Destrancar um canal")
+@app_commands.describe(canal="Canal para destrancar (padrão: atual)")
+@app_commands.default_permissions(manage_channels=True)
+async def unlock(interaction: discord.Interaction, canal: Optional[discord.TextChannel] = None):
+    if canal is None:
+        canal = interaction.channel
+    
+    try:
+        overwrite = canal.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = None
+        await canal.set_permissions(interaction.guild.default_role, overwrite=overwrite)
+        
+        embed = discord.Embed(
+            title="🔓 Canal Destrancado",
+            description=f"{canal.mention} foi destrancado por {interaction.user.mention}",
+            color=discord.Color.green()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="slowmode", description="🐌 Ativar modo lento no canal")
+@app_commands.describe(segundos="Segundos entre mensagens (0 para desativar)")
+@app_commands.default_permissions(manage_channels=True)
+async def slowmode(interaction: discord.Interaction, segundos: int):
+    if segundos < 0 or segundos > 21600:
+        await interaction.response.send_message("❌ Segundos deve ser entre 0 e 21600 (6 horas)!", ephemeral=True)
+        return
+    
+    try:
+        await interaction.channel.edit(slowmode_delay=segundos)
+        
+        if segundos > 0:
+            embed = discord.Embed(
+                title="🐌 Modo Lento Ativado",
+                description=f"Usuários agora podem enviar mensagem a cada **{segundos} segundos**",
+                color=discord.Color.blue()
+            )
+        else:
+            embed = discord.Embed(
+                title="🐌 Modo Lento Desativado",
+                description="Canal voltou ao normal",
+                color=discord.Color.green()
+            )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+@bot.tree.command(name="nick", description="✏️ Mudar apelido de um membro")
+@app_commands.describe(membro="Membro", novo_apelido="Novo apelido")
+@app_commands.default_permissions(manage_nicknames=True)
+async def nick(interaction: discord.Interaction, membro: discord.Member, novo_apelido: str):
+    if membro.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
+        await interaction.response.send_message("❌ Você não pode mudar apelido de alguém com cargo maior ou igual ao seu!", ephemeral=True)
+        return
+    
+    try:
+        antigo = membro.display_name
+        await membro.edit(nick=novo_apelido)
+        
+        embed = discord.Embed(
+            title="✏️ Apelido Alterado",
+            description=f"**Membro:** {membro.mention}\n**Antigo:** {antigo}\n**Novo:** {novo_apelido}",
+            color=discord.Color.blue()
+        )
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erro: {e}", ephemeral=True)
+
+# ===== SISTEMA DE MÚSICA (NOVO) =====
+
+class MusicPlayer:
+    def __init__(self, bot, guild_id):
+        self.bot = bot
+        self.guild_id = guild_id
+        self.queue = []
+        self.now_playing = None
+        self.loop = False
+        self.volume = 0.5
+        self.voice_client = None
+
+async def get_youtube_info(query):
+    """Busca informações do YouTube"""
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': True
+    }
+    
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        try:
+            if query.startswith('http'):
+                info = ydl.extract_info(query, download=False)
+                return {
+                    'title': info.get('title', 'Desconhecido'),
+                    'url': info['url'] if 'url' in info else info.get('webpage_url', query),
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail', '')
+                }
+            else:
+                info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
+                return {
+                    'title': info.get('title', 'Desconhecido'),
+                    'url': info['webpage_url'],
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail', '')
+                }
+        except Exception as e:
+            print(f"Erro ao buscar música: {e}")
+            return None
+
+class MusicControls(View):
+    def __init__(self, guild_id):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+    
+    @discord.ui.button(label="⏸️", style=discord.ButtonStyle.secondary)
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message("❌ Você não está em um canal de voz!", ephemeral=True)
+            return
+        
+        voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+        if voice_client and voice_client.is_playing():
+            voice_client.pause()
+            await interaction.response.send_message("⏸️ Música pausada!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nenhuma música tocando!", ephemeral=True)
+    
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.success)
+    async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message("❌ Você não está em um canal de voz!", ephemeral=True)
+            return
+        
+        voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+        if voice_client and voice_client.is_paused():
+            voice_client.resume()
+            await interaction.response.send_message("▶️ Música continuada!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nenhuma música pausada!", ephemeral=True)
+    
+    @discord.ui.button(label="⏭️", style=discord.ButtonStyle.primary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message("❌ Você não está em um canal de voz!", ephemeral=True)
+            return
+        
+        voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+        if voice_client and voice_client.is_playing():
+            voice_client.stop()
+            await interaction.response.send_message("⏭️ Música pulada!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nenhuma música tocando!", ephemeral=True)
+    
+    @discord.ui.button(label="⏹️", style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message("❌ Você não está em um canal de voz!", ephemeral=True)
+            return
+        
+        voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+        if voice_client:
+            bot.music_queues[interaction.guild.id] = []
+            if voice_client.is_playing():
+                voice_client.stop()
+            await voice_client.disconnect()
+            await interaction.response.send_message("⏹️ Player parado e desconectado!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Não estou em um canal de voz!", ephemeral=True)
+    
+    @discord.ui.button(label="🔁", style=discord.ButtonStyle.secondary)
+    async def loop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild.id not in bot.music_loops:
+            bot.music_loops[interaction.guild.id] = False
+        
+        bot.music_loops[interaction.guild.id] = not bot.music_loops[interaction.guild.id]
+        status = "ativado" if bot.music_loops[interaction.guild.id] else "desativado"
+        
+        await interaction.response.send_message(f"🔁 Loop {status}!", ephemeral=True)
+
+async def play_next(guild_id, channel):
+    """Toca a próxima música na fila"""
+    if guild_id not in bot.music_queues or not bot.music_queues[guild_id]:
+        return
+    
+    if bot.music_loops.get(guild_id, False) and bot.now_playing.get(guild_id):
+        # Se loop está ativado, coloca a música atual de volta na fila
+        bot.music_queues[guild_id].insert(0, bot.now_playing[guild_id])
+    
+    if not bot.music_queues[guild_id]:
+        return
+    
+    next_song = bot.music_queues[guild_id].pop(0)
+    bot.now_playing[guild_id] = next_song
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild_id=guild_id)
+    if not voice_client:
+        return
+    
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'no_warnings': True
+    }
+    
+    try:
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(next_song['url'], download=False)
+            url2 = info['formats'][0]['url'] if 'formats' in info else info['url']
+        
+        volume = bot.music_volumes.get(guild_id, 0.5)
+        
+        ffmpeg_options = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': f'-vn -filter:a "volume={volume}"'
+        }
+        
+        source = await discord.FFmpegOpusAudio.from_probe(url2, **ffmpeg_options)
+        
+        def after_playing(error):
+            if error:
+                print(f"Erro ao tocar: {error}")
+            asyncio.run_coroutine_threadsafe(play_next(guild_id, channel), bot.loop)
+        
+        voice_client.play(source, after=after_playing)
+        
+        embed = discord.Embed(
+            title="🎵 Tocando Agora",
+            description=f"**{next_song['title']}**",
+            color=discord.Color.green()
+        )
+        
+        if next_song.get('duration'):
+            minutos = next_song['duration'] // 60
+            segundos = next_song['duration'] % 60
+            embed.add_field(name="⏱️ Duração", value=f"{minutos}:{segundos:02d}", inline=True)
+        
+        if next_song.get('thumbnail'):
+            embed.set_thumbnail(url=next_song['thumbnail'])
+        
+        embed.add_field(name="📊 Fila", value=f"{len(bot.music_queues[guild_id])} músicas", inline=True)
+        
+        await channel.send(embed=embed, view=MusicControls(guild_id))
+        
+    except Exception as e:
+        print(f"Erro ao tocar música: {e}")
+        await channel.send(f"❌ Erro ao tocar música: {e}")
+        await play_next(guild_id, channel)
+
+@bot.tree.command(name="play", description="🎵 Tocar uma música do YouTube")
+@app_commands.describe(pesquisa="Nome da música ou URL do YouTube")
+async def play(interaction: discord.Interaction, pesquisa: str):
+    if not interaction.user.voice:
+        await interaction.response.send_message("❌ Você precisa estar em um canal de voz!", ephemeral=True)
+        return
+    
+    voice_channel = interaction.user.voice.channel
+    guild_id = interaction.guild.id
+    
+    await interaction.response.defer()
+    
+    # Busca a música
+    song_info = await get_youtube_info(pesquisa)
+    if not song_info:
+        await interaction.followup.send("❌ Não foi possível encontrar a música!")
+        return
+    
+    # Conecta ao canal de voz se não estiver conectado
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if not voice_client:
+        voice_client = await voice_channel.connect()
+        bot.voice_clients[guild_id] = voice_client
+    
+    # Inicializa fila se necessário
+    if guild_id not in bot.music_queues:
+        bot.music_queues[guild_id] = []
+    
+    # Adiciona à fila
+    bot.music_queues[guild_id].append(song_info)
+    posicao = len(bot.music_queues[guild_id])
+    
+    embed = discord.Embed(
+        title="🎵 Adicionado à Fila",
+        description=f"**{song_info['title']}**",
+        color=discord.Color.blue()
+    )
+    
+    if song_info.get('duration'):
+        minutos = song_info['duration'] // 60
+        segundos = song_info['duration'] % 60
+        embed.add_field(name="⏱️ Duração", value=f"{minutos}:{segundos:02d}", inline=True)
+    
+    embed.add_field(name="📊 Posição", value=f"#{posicao}", inline=True)
+    
+    if song_info.get('thumbnail'):
+        embed.set_thumbnail(url=song_info['thumbnail'])
+    
+    await interaction.followup.send(embed=embed)
+    
+    # Se não está tocando nada, começa a tocar
+    if not voice_client.is_playing():
+        await play_next(guild_id, interaction.channel)
+
+@bot.tree.command(name="queue", description="📋 Ver fila de músicas")
+async def queue(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    
+    if guild_id not in bot.music_queues or not bot.music_queues[guild_id]:
+        await interaction.response.send_message("📋 A fila está vazia!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Fila de Músicas",
+        description=f"Total: **{len(bot.music_queues[guild_id])}** músicas",
+        color=discord.Color.blue()
+    )
+    
+    if guild_id in bot.now_playing and bot.now_playing[guild_id]:
+        atual = bot.now_playing[guild_id]
+        embed.add_field(
+            name="🎵 Tocando Agora",
+            value=f"**{atual['title']}**",
+            inline=False
+        )
+    
+    queue_list = ""
+    for i, song in enumerate(bot.music_queues[guild_id][:10], 1):
+        queue_list += f"{i}. {song['title'][:50]}...\n"
+    
+    if queue_list:
+        embed.add_field(name="📊 Próximas", value=queue_list, inline=False)
+    
+    if len(bot.music_queues[guild_id]) > 10:
+        embed.set_footer(text=f"E mais {len(bot.music_queues[guild_id]) - 10} músicas...")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="skip", description="⏭️ Pular música atual")
+async def skip(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("❌ Você precisa estar em um canal de voz!", ephemeral=True)
+        return
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if not voice_client or not voice_client.is_playing():
+        await interaction.response.send_message("❌ Não há música tocando!", ephemeral=True)
+        return
+    
+    voice_client.stop()
+    await interaction.response.send_message("⏭️ Música pulada!")
+
+@bot.tree.command(name="stop", description="⏹️ Parar música e limpar fila")
+async def stop(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("❌ Você precisa estar em um canal de voz!", ephemeral=True)
+        return
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if not voice_client:
+        await interaction.response.send_message("❌ Não estou em um canal de voz!", ephemeral=True)
+        return
+    
+    guild_id = interaction.guild.id
+    bot.music_queues[guild_id] = []
+    
+    if voice_client.is_playing():
+        voice_client.stop()
+    
+    await voice_client.disconnect()
+    await interaction.response.send_message("⏹️ Player parado e desconectado!")
+
+@bot.tree.command(name="pause", description="⏸️ Pausar música")
+async def pause(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("❌ Você precisa estar em um canal de voz!", ephemeral=True)
+        return
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if not voice_client or not voice_client.is_playing():
+        await interaction.response.send_message("❌ Não há música tocando!", ephemeral=True)
+        return
+    
+    voice_client.pause()
+    await interaction.response.send_message("⏸️ Música pausada!")
+
+@bot.tree.command(name="resume", description="▶️ Continuar música")
+async def resume(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("❌ Você precisa estar em um canal de voz!", ephemeral=True)
+        return
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if not voice_client or not voice_client.is_paused():
+        await interaction.response.send_message("❌ Não há música pausada!", ephemeral=True)
+        return
+    
+    voice_client.resume()
+    await interaction.response.send_message("▶️ Música continuada!")
+
+@bot.tree.command(name="volume", description="🔊 Ajustar volume")
+@app_commands.describe(nivel="Nível de volume (0-100)")
+async def volume(interaction: discord.Interaction, nivel: int):
+    if nivel < 0 or nivel > 100:
+        await interaction.response.send_message("❌ Volume deve ser entre 0 e 100!", ephemeral=True)
+        return
+    
+    guild_id = interaction.guild.id
+    bot.music_volumes[guild_id] = nivel / 100
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    
+    if voice_client and voice_client.source:
+        # Nota: Não é possível mudar volume dinamicamente no Discord.py facilmente
+        pass
+    
+    await interaction.response.send_message(f"🔊 Volume ajustado para {nivel}%")
+
+@bot.tree.command(name="loop", description="🔁 Ativar/desativar loop da música atual")
+async def loop(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    
+    if guild_id not in bot.music_loops:
+        bot.music_loops[guild_id] = False
+    
+    bot.music_loops[guild_id] = not bot.music_loops[guild_id]
+    status = "ativado" if bot.music_loops[guild_id] else "desativado"
+    
+    await interaction.response.send_message(f"🔁 Loop {status}!")
+
+@bot.tree.command(name="nowplaying", description="🎵 Ver música atual")
+async def nowplaying(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    
+    if guild_id not in bot.now_playing or not bot.now_playing[guild_id]:
+        await interaction.response.send_message("❌ Não há música tocando no momento!", ephemeral=True)
+        return
+    
+    song = bot.now_playing[guild_id]
+    
+    embed = discord.Embed(
+        title="🎵 Tocando Agora",
+        description=f"**{song['title']}**",
+        color=discord.Color.green()
+    )
+    
+    if song.get('duration'):
+        minutos = song['duration'] // 60
+        segundos = song['duration'] % 60
+        embed.add_field(name="⏱️ Duração", value=f"{minutos}:{segundos:02d}", inline=True)
+    
+    if song.get('thumbnail'):
+        embed.set_thumbnail(url=song['thumbnail'])
+    
+    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
+    if voice_client and voice_client.is_playing():
+        embed.add_field(name="📊 Status", value="▶️ Tocando", inline=True)
+    elif voice_client and voice_client.is_paused():
+        embed.add_field(name="📊 Status", value="⏸️ Pausado", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+# ===== SISTEMA DE UTILIDADE (NOVO) =====
+
+@bot.tree.command(name="lembrete", description="⏰ Criar um lembrete")
+@app_commands.describe(
+    tempo="Tempo (ex: 10m, 1h, 2d, 30s)",
+    mensagem="Mensagem do lembrete"
+)
+async def lembrete(interaction: discord.Interaction, tempo: str, mensagem: str):
+    # Converte tempo para segundos
+    try:
+        if tempo.endswith('s'):
+            segundos = int(tempo[:-1])
+        elif tempo.endswith('m'):
+            segundos = int(tempo[:-1]) * 60
+        elif tempo.endswith('h'):
+            segundos = int(tempo[:-1]) * 3600
+        elif tempo.endswith('d'):
+            segundos = int(tempo[:-1]) * 86400
+        else:
+            segundos = int(tempo)
+    except:
+        await interaction.response.send_message("❌ Formato inválido! Use: 30s, 10m, 1h, 2d", ephemeral=True)
+        return
+    
+    if segundos < 10 or segundos > 2592000:  # 30 dias máximo
+        await interaction.response.send_message("❌ Tempo deve ser entre 10 segundos e 30 dias!", ephemeral=True)
+        return
+    
+    remind_time = datetime.now() + timedelta(seconds=segundos)
+    
+    reminder = {
+        'id': len(bot.reminders) + 1,
+        'user_id': str(interaction.user.id),
+        'channel_id': str(interaction.channel.id),
+        'message': mensagem,
+        'remind_time': remind_time
+    }
+    
+    bot.reminders.append(reminder)
+    bot.save_data()
+    
+    tempo_formatado = ""
+    if segundos >= 86400:
+        tempo_formatado = f"{segundos//86400}d {segundos%86400//3600}h"
+    elif segundos >= 3600:
+        tempo_formatado = f"{segundos//3600}h {segundos%3600//60}m"
+    elif segundos >= 60:
+        tempo_formatado = f"{segundos//60}m {segundos%60}s"
+    else:
+        tempo_formatado = f"{segundos}s"
+    
+    embed = discord.Embed(
+        title="⏰ Lembrete Criado!",
+        description=f"**Mensagem:** {mensagem}\n**Tempo:** {tempo_formatado}\n**Quando:** {remind_time.strftime('%d/%m/%Y %H:%M:%S')}",
+        color=discord.Color.blue()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="clima", description="☀️ Ver clima de uma cidade")
+@app_commands.describe(cidade="Nome da cidade")
+async def clima(interaction: discord.Interaction, cidade: str):
+    # Usando wttr.in (não precisa de API key)
+    await interaction.response.defer()
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Versão simplificada do clima
+            url = f"https://wttr.in/{cidade}?format=%c+%t+%w+%h"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    
+                    embed = discord.Embed(
+                        title=f"☀️ Clima em {cidade.title()}",
+                        description=f"```{text}```",
+                        color=discord.Color.blue()
+                    )
+                    embed.set_footer(text="Fonte: wttr.in")
+                    
+                    await interaction.followup.send(embed=embed)
+                else:
+                    await interaction.followup.send("❌ Cidade não encontrada!")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Erro ao buscar clima: {e}")
+
+@bot.tree.command(name="traduzir", description="🌐 Traduzir texto")
+@app_commands.describe(
+    texto="Texto para traduzir",
+    idioma="Idioma destino (ex: pt, en, es, fr)"
+)
+async def traduzir(interaction: discord.Interaction, texto: str, idioma: str):
+    await interaction.response.defer()
+    
+    idiomas = {
+        'pt': 'português', 'en': 'inglês', 'es': 'espanhol', 'fr': 'francês',
+        'de': 'alemão', 'it': 'italiano', 'ja': 'japonês', 'ko': 'coreano',
+        'zh': 'chinês', 'ru': 'russo'
+    }
+    
+    if idioma not in idiomas:
+        await interaction.followup.send(f"❌ Idiomas disponíveis: {', '.join(idiomas.keys())}")
+        return
+    
+    try:
+        # Usando API gratuita (my memory)
+        url = f"https://api.mymemory.translated.net/get?q={texto}&langpair=auto|{idioma}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                traducao = data['responseData']['translatedText']
+                
+                embed = discord.Embed(
+                    title="🌐 Tradução",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="📝 Original", value=texto[:1024], inline=False)
+                embed.add_field(name=f"📝 Tradução ({idiomas[idioma]})", value=traducao[:1024], inline=False)
+                
+                await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Erro ao traduzir: {e}")
+
+@bot.tree.command(name="cep", description="📮 Buscar endereço por CEP")
+@app_commands.describe(cep="CEP (apenas números)")
+async def cep(interaction: discord.Interaction, cep: str):
+    cep = cep.replace("-", "").strip()
+    
+    if not cep.isdigit() or len(cep) != 8:
+        await interaction.response.send_message("❌ CEP inválido! Use 8 números.", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://viacep.com.br/ws/{cep}/json/"
+            async with session.get(url) as resp:
+                data = await resp.json()
+                
+                if "erro" in data:
+                    await interaction.followup.send("❌ CEP não encontrado!")
+                    return
+                
+                embed = discord.Embed(
+                    title=f"📮 CEP {cep}",
+                    color=discord.Color.blue()
+                )
+                
+                embed.add_field(name="Logradouro", value=data.get('logradouro', 'N/A'), inline=False)
+                embed.add_field(name="Bairro", value=data.get('bairro', 'N/A'), inline=True)
+                embed.add_field(name="Cidade", value=data.get('localidade', 'N/A'), inline=True)
+                embed.add_field(name="UF", value=data.get('uf', 'N/A'), inline=True)
+                embed.add_field(name="DDD", value=data.get('ddd', 'N/A'), inline=True)
+                
+                await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Erro ao buscar CEP: {e}")
+
+@bot.tree.command(name="aniversario_membro", description="🎂 Registrar seu aniversário")
+@app_commands.describe(
+    dia="Dia do nascimento (1-31)",
+    mes="Mês do nascimento (1-12)",
+    ano="Ano de nascimento (opcional)"
+)
+async def aniversario_membro(interaction: discord.Interaction, dia: int, mes: int, ano: Optional[int] = None):
+    if dia < 1 or dia > 31 or mes < 1 or mes > 12:
+        await interaction.response.send_message("❌ Dia ou mês inválido!", ephemeral=True)
+        return
+    
+    if ano and (ano < 1900 or ano > datetime.now().year):
+        await interaction.response.send_message("❌ Ano inválido!", ephemeral=True)
+        return
+    
+    user_id = str(interaction.user.id)
+    
+    bot.birthdays[user_id] = {
+        'day': dia,
+        'month': mes,
+        'year': ano
+    }
+    
+    bot.save_data()
+    
+    data_str = f"{dia:02d}/{mes:02d}"
+    if ano:
+        data_str += f"/{ano}"
+    
+    embed = discord.Embed(
+        title="🎂 Aniversário Registrado!",
+        description=f"Sua data de aniversário foi registrada como **{data_str}**",
+        color=discord.Color.gold()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="aniversarios_hoje", description="🎉 Ver quem faz aniversário hoje")
+async def aniversarios_hoje(interaction: discord.Interaction):
+    hoje = datetime.now()
+    aniversariantes = []
+    
+    for user_id, data in bot.birthdays.items():
+        if data['month'] == hoje.month and data['day'] == hoje.day:
+            member = interaction.guild.get_member(int(user_id))
+            if member:
+                idade = hoje.year - data.get('year', hoje.year) if data.get('year') else None
+                aniversariantes.append((member, idade))
+    
+    if not aniversariantes:
+        await interaction.response.send_message("📅 Ninguém faz aniversário hoje!")
+        return
+    
+    embed = discord.Embed(
+        title="🎉 Aniversariantes do Dia",
+        description=f"Hoje é dia {hoje.strftime('%d/%m')}",
+        color=discord.Color.gold()
+    )
+    
+    for member, idade in aniversariantes:
+        texto = member.mention
+        if idade:
+            texto += f" (completa {idade} anos)"
+        embed.add_field(name="🎂", value=texto, inline=False)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="lembretes", description="📋 Ver seus lembretes ativos")
+async def lembretes(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    user_reminders = [r for r in bot.reminders if r['user_id'] == user_id]
+    
+    if not user_reminders:
+        await interaction.response.send_message("📋 Você não tem lembretes ativos!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Seus Lembretes",
+        color=discord.Color.blue()
+    )
+    
+    for reminder in user_reminders[:10]:
+        tempo_restante = reminder['remind_time'] - datetime.now()
+        if tempo_restante.total_seconds() > 0:
+            horas = tempo_restante.total_seconds() // 3600
+            minutos = (tempo_restante.total_seconds() % 3600) // 60
+            
+            if horas > 0:
+                tempo_str = f"{int(horas)}h {int(minutos)}m"
+            else:
+                tempo_str = f"{int(minutos)}m"
+            
+            embed.add_field(
+                name=f"ID: {reminder['id']}",
+                value=f"**{reminder['message']}**\n⏰ Em {tempo_str}",
+                inline=False
+            )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="remover_lembrete", description="🗑️ Remover um lembrete")
+@app_commands.describe(id_lembrete="ID do lembrete (use /lembretes)")
+async def remover_lembrete(interaction: discord.Interaction, id_lembrete: int):
+    user_id = str(interaction.user.id)
+    
+    for reminder in bot.reminders:
+        if reminder['id'] == id_lembrete and reminder['user_id'] == user_id:
+            bot.reminders.remove(reminder)
+            bot.save_data()
+            await interaction.response.send_message(f"✅ Lembrete {id_lembrete} removido!")
+            return
+    
+    await interaction.response.send_message("❌ Lembrete não encontrado!", ephemeral=True)
+
+# ===== SISTEMA CRIATIVO (NOVO) =====
+
+@bot.tree.command(name="frase", description="💭 Frase motivacional do dia")
+async def frase(interaction: discord.Interaction):
+    frase = random.choice(bot.daily_phrases)
+    
+    embed = discord.Embed(
+        title="💭 Frase do Dia",
+        description=frase,
+        color=discord.Color.gold()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="pensamento", description="🤔 Pensamento aleatório")
+async def pensamento(interaction: discord.Interaction):
+    pensamentos = [
+        "🤔 Será que os peixes têm sede?",
+        "🤔 Se um elétron não pode ser observado, como sabemos que ele existe?",
+        "🤔 Se o tempo é relativo, por que temos pressa?",
+        "🤔 O que veio primeiro: o ovo ou a galinha?",
+        "🤔 Se nada dura para sempre, será que essa frase dura?",
+        "🤔 Por que chamamos de 'descansar' quando vamos dormir, se o cérebro continua trabalhando?",
+        "🤔 Se você está lendo isso, quem está pensando agora?",
+        "🤔 O amanhã é realmente amanhã se você pensar nele hoje?"
+    ]
+    
+    embed = discord.Embed(
+        title="🤔 Pensamento do Momento",
+        description=random.choice(pensamentos),
+        color=discord.Color.purple()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="horoscopo", description="🔮 Horóscopo do dia")
+@app_commands.describe(signo="Seu signo")
+async def horoscopo(interaction: discord.Interaction, signo: str):
+    signos_validos = ["áries", "touro", "gêmeos", "câncer", "leão", "virgem", 
+                      "libra", "escorpião", "sagitário", "capricórnio", "aquário", "peixes"]
+    
+    if signo.lower() not in signos_validos:
+        await interaction.response.send_message(f"❌ Signos válidos: {', '.join(signos_validos)}")
+        return
+    
+    previsoes = [
+        "🌟 Hoje é um ótimo dia para novos começos!",
+        "💖 O amor está no ar, fique atento aos sinais!",
+        "💰 Boas notícias financeiras podem chegar!",
+        "🤝 Parcerias serão favorecidas hoje!",
+        "🧘 Tire um tempo para cuidar de você!",
+        "🎯 Foco nos objetivos, você está no caminho certo!",
+        "🌈 Aproveite as pequenas alegrias do dia!",
+        "⭐ Alguém especial pode estar pensando em você!"
+    ]
+    
+    cores = {
+        'áries': 'Vermelho', 'touro': 'Verde', 'gêmeos': 'Amarelo',
+        'câncer': 'Prata', 'leão': 'Laranja', 'virgem': 'Marrom',
+        'libra': 'Rosa', 'escorpião': 'Preto', 'sagitário': 'Roxo',
+        'capricórnio': 'Cinza', 'aquário': 'Azul', 'peixes': 'Turquesa'
+    }
+    
+    numeros = [random.randint(1, 60) for _ in range(5)]
+    
+    embed = discord.Embed(
+        title=f"🔮 Horóscopo de {signo.title()}",
+        description=random.choice(previsoes),
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="🎨 Cor do dia", value=cores.get(signo.lower(), 'Arco-íris'), inline=True)
+    embed.add_field(name="🔢 Números da sorte", value=', '.join(str(n) for n in numeros), inline=True)
+    embed.set_footer(text="Use /signos para ver compatibilidade")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="charada", description="❓ Receba uma charada")
+async def charada(interaction: discord.Interaction):
+    charada = random.choice(bot.riddles)
+    
+    embed = discord.Embed(
+        title="❓ Charada",
+        description=charada['pergunta'],
+        color=discord.Color.blue()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+    
+    # Espera 15 segundos e revela a resposta
+    await asyncio.sleep(15)
+    
+    resposta_embed = discord.Embed(
+        title="❓ Resposta",
+        description=f"||{charada['resposta']}||",
+        color=discord.Color.green()
+    )
+    
+    await interaction.channel.send(embed=resposta_embed)
+
+@bot.tree.command(name="piada", description="😂 Piada aleatória")
+async def piada(interaction: discord.Interaction):
+    await interaction.response.send_message(f"😂 {random.choice(bot.jokes)}")
+
+@bot.tree.command(name="fato", description="🔍 Fato curioso")
+async def fato(interaction: discord.Interaction):
+    await interaction.response.send_message(f"🔍 {random.choice(bot.fun_facts)}")
+
+@bot.tree.command(name="conselho", description="💡 Conselho aleatório")
+async def conselho(interaction: discord.Interaction):
+    conselhos = [
+        "💡 Beba água! A hidratação é importante!",
+        "💡 Durma pelo menos 8 horas por noite!",
+        "💡 Pratique exercícios regularmente!",
+        "💡 Leia um livro esse mês!",
+        "💡 Ligue para alguém que você ama!",
+        "💡 Aprenda algo novo todo dia!",
+        "💡 Guarde dinheiro para o futuro!",
+        "💡 Seja gentil com você mesmo!",
+        "💡 Não se compare aos outros!",
+        "💡 Celebre suas pequenas vitórias!"
+    ]
+    
+    await interaction.response.send_message(random.choice(conselhos))
+
+@bot.tree.command(name="8ball", description="🎱 Pergunte ao destino")
+async def eight_ball(interaction: discord.Interaction, pergunta: str):
+    respostas = [
+        "Sim!", "Não!", "Talvez...", "Com certeza!", "Nem pensar!",
+        "Os deuses dizem que sim!", "Melhor não dizer agora.", "Pode confiar!",
+        "Minhas fontes dizem que sim!", "Perspectiva boa!", "Sinais apontam que sim!",
+        "Muito duvidoso...", "Provavelmente!", "Não conte com isso!"
+    ]
+    
+    embed = discord.Embed(
+        title="🎱 8Ball",
+        description=f"**Pergunta:** {pergunta}\n**Resposta:** {random.choice(respostas)}",
+        color=discord.Color.purple()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
+# ===== COMANDOS BÁSICOS (Mantidos) =====
 
 @bot.tree.command(name="ping", description="🏓 Latência do bot")
 async def ping(interaction: discord.Interaction):
@@ -1640,6 +3128,9 @@ async def userinfo(interaction: discord.Interaction, membro: Optional[discord.Me
     embed.add_field(name="Conta criada", value=membro.created_at.strftime("%d/%m/%Y"), inline=True)
     embed.add_field(name="Entrou em", value=membro.joined_at.strftime("%d/%m/%Y"), inline=True)
     
+    if membro.premium_since:
+        embed.add_field(name="💎 Booster desde", value=membro.premium_since.strftime("%d/%m/%Y"), inline=True)
+    
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="serverinfo", description="📊 Informações do servidor")
@@ -1650,11 +3141,17 @@ async def serverinfo(interaction: discord.Interaction):
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
     
+    total_membros = guild.member_count
+    bots = len([m for m in guild.members if m.bot])
+    humanos = total_membros - bots
+    
     embed.add_field(name="ID", value=guild.id, inline=True)
     embed.add_field(name="Dono", value=guild.owner.mention, inline=True)
-    embed.add_field(name="Membros", value=guild.member_count, inline=True)
+    embed.add_field(name="Membros", value=f"👤 Humanos: {humanos}\n🤖 Bots: {bots}\n📊 Total: {total_membros}", inline=True)
     embed.add_field(name="Canais", value=len(guild.channels), inline=True)
     embed.add_field(name="Cargos", value=len(guild.roles), inline=True)
+    embed.add_field(name="Emojis", value=len(guild.emojis), inline=True)
+    embed.add_field(name="Boost", value=f"Nível {guild.premium_tier}\n{guild.premium_subscription_count} boosts", inline=True)
     embed.add_field(name="Criado em", value=guild.created_at.strftime("%d/%m/%Y"), inline=True)
     
     await interaction.response.send_message(embed=embed)
@@ -1667,7 +3164,10 @@ async def avatar(interaction: discord.Interaction, membro: Optional[discord.Memb
     embed = discord.Embed(title=f"Avatar de {membro.display_name}")
     embed.set_image(url=membro.display_avatar.url)
     
-    await interaction.response.send_message(embed=embed)
+    view = View()
+    view.add_item(Button(label="📸 Download", url=membro.display_avatar.url))
+    
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="calcular", description="🧮 Calculadora")
 async def calcular(interaction: discord.Interaction, num1: float, operador: str, num2: float):
@@ -1685,8 +3185,10 @@ async def calcular(interaction: discord.Interaction, num1: float, operador: str,
             resultado = num1 / num2
         elif operador == "^":
             resultado = num1 ** num2
+        elif operador == "%":
+            resultado = num1 % num2
         else:
-            await interaction.response.send_message("❌ Operador inválido!")
+            await interaction.response.send_message("❌ Operador inválido! Use +, -, *, /, ^, %")
             return
         
         await interaction.response.send_message(f"🧮 Resultado: `{num1} {operador} {num2} = {resultado}`")
@@ -1697,121 +3199,35 @@ async def calcular(interaction: discord.Interaction, num1: float, operador: str,
 async def ola_mundo(interaction: discord.Interaction):
     await interaction.response.send_message(f"Olá {interaction.user.mention}! Bem-vindo ao bot Fort! 🎉")
 
-# ==================== COMANDOS DE DIVERSÃO (ANTIGOS) ====================
-
-@bot.tree.command(name="8ball", description="🎱 Pergunte ao destino")
-async def eight_ball(interaction: discord.Interaction, pergunta: str):
-    respostas = [
-        "Sim!", "Não!", "Talvez...", "Com certeza!", "Nem pensar!",
-        "Os deuses dizem que sim!", "Melhor não dizer agora.", "Pode confiar!"
-    ]
-    
-    embed = discord.Embed(
-        title="🎱 8Ball",
-        description=f"**Pergunta:** {pergunta}\n**Resposta:** {random.choice(respostas)}",
-        color=discord.Color.purple()
-    )
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="piada", description="😂 Piada aleatória")
-async def piada(interaction: discord.Interaction):
-    piadas = [
-        "Por que o computador foi preso? Porque executou um comando!",
-        "O que o zero disse para o oito? Belo cinto!",
-        "Por que os elétrons nunca pagam contas? Porque estão sempre em débito!",
-        "O que o pato disse para a pata? Vem quá!",
-        "Qual o cúmulo da rapidez? Fechar o zíper com uma bala!"
-    ]
-    
-    await interaction.response.send_message(f"😂 {random.choice(piadas)}")
-
-@bot.tree.command(name="conselho", description="💡 Conselho aleatório")
-async def conselho(interaction: discord.Interaction):
-    conselhos = [
-        "Beba água! 💧", "Durma bem! 😴", "Seja gentil! 🧘",
-        "Aprenda algo novo! 📚", "Sorria! 😊", "Ajude alguém! 🤝"
-    ]
-    
-    await interaction.response.send_message(f"💡 {random.choice(conselhos)}")
-
-@bot.tree.command(name="fato", description="🔍 Fato curioso")
-async def fato(interaction: discord.Interaction):
-    fatos = [
-        "Flamingos nascem cinzas!", "Coração da baleia azul é enorme!",
-        "Ursos polares têm pele preta!", "Mel nunca estraga!",
-        "Bananas são radioativas!", "Polvos têm três corações!"
-    ]
-    
-    await interaction.response.send_message(f"🔍 {random.choice(fatos)}")
-
-@bot.tree.command(name="baitola", description="🏳️‍🌈 Mensagem especial")
-async def baitola(interaction: discord.Interaction, membro: discord.Member):
-    frases = [
-        f"{membro.mention} é o maior baitola do servidor! 🏳️‍🌈",
-        f"Parabéns {membro.mention}, você é o baitola master! 🏆"
-    ]
-    await interaction.response.send_message(random.choice(frases))
-
-# ==================== COMANDOS COM GIFS ====================
+# ===== COMANDOS DE DIVERSÃO COM GIF (Mantidos) =====
 
 gifs_abraco = [
     "https://media.giphy.com/media/3ZnBrkqoaI2hq/giphy.gif",
     "https://media.giphy.com/media/od5H3PmEG5EVq/giphy.gif",
     "https://media.giphy.com/media/lrr9rHuoJOE0w/giphy.gif",
-    "https://media.giphy.com/media/13d2jHlSlxklVe/giphy.gif",
-    "https://media.giphy.com/media/wnsgren9NtITS/giphy.gif",
-    "https://media.giphy.com/media/PHZ7v9tfQu0o0/giphy.gif",
-    "https://media.giphy.com/media/3o7abB06u9bNzA8LC8/giphy.gif",
-    "https://media.giphy.com/media/l2JegQYezBkR90gFm/giphy.gif"
+    "https://media.giphy.com/media/13d2jHlSlxklVe/giphy.gif"
 ]
 
 gifs_beijo = [
     "https://media.giphy.com/media/bGm9FuBCGg4SY/giphy.gif",
     "https://media.giphy.com/media/G3va31oEEnIkM/giphy.gif",
     "https://media.giphy.com/media/12VXIxKaIEarL2/giphy.gif",
-    "https://media.giphy.com/media/hnNyVPIXgLdle/giphy.gif",
-    "https://media.giphy.com/media/flmwfIpFVrSKI/giphy.gif",
-    "https://media.giphy.com/media/3oz8xIZrAhijabg8YM/giphy.gif",
-    "https://media.giphy.com/media/3o7abKhOpu0N2tWqVO/giphy.gif",
-    "https://media.giphy.com/media/26gs9kSN6d5PxSsQU/giphy.gif"
+    "https://media.giphy.com/media/hnNyVPIXgLdle/giphy.gif"
 ]
 
 gifs_carinho = [
     "https://media.giphy.com/media/4HP0ddZnNVvKU/giphy.gif",
     "https://media.giphy.com/media/109ltuoSQT212w/giphy.gif",
     "https://media.giphy.com/media/xT0BKiwjg0O6yIR2o/giphy.gif",
-    "https://media.giphy.com/media/3o7abpRrPjBne2h2Qw/giphy.gif",
-    "https://media.giphy.com/media/l0MYt5jH6gkTWm8qo/giphy.gif",
-    "https://media.giphy.com/media/xT0Gqn9yI8Edh6L7W0/giphy.gif",
-    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
-    "https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif"
+    "https://media.giphy.com/media/3o7abpRrPjBne2h2Qw/giphy.gif"
 ]
 
 gifs_tapa = [
     "https://media.giphy.com/media/uG3lKkAuh53wc/giphy.gif",
     "https://media.giphy.com/media/j3iGKfXRKlLqw/giphy.gif",
     "https://media.giphy.com/media/3oxHQq4M0xGpWpU2g/giphy.gif",
-    "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif",
-    "https://media.giphy.com/media/3o7TKz2fL6f5T7d6cU/giphy.gif"
-]
-
-gifs_festa = [
-    "https://media.giphy.com/media/l0MYEqEzwMWFCg8rm/giphy.gif",
-    "https://media.giphy.com/media/3o7abAHdYwZdO3Q8qk/giphy.gif",
-    "https://media.giphy.com/media/3o85xnoIXebk3xYx4I/giphy.gif",
-    "https://media.giphy.com/media/l0MYt5jH6gkTWm8qo/giphy.gif",
-    "https://media.giphy.com/media/3o7TKo5M8RxWpU8G1i/giphy.gif"
-]
-
-gifs_matar = [
-    "https://media.giphy.com/media/3o6Mbj2w67HnPQcQoM/giphy.gif",
-    "https://media.giphy.com/media/l0MYEqEzwMWFCg8rm/giphy.gif",
-    "https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif",
     "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif"
 ]
-
-# ===== NOVOS COMANDOS DE INTERAÇÃO COM GIF =====
 
 @bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
 async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
@@ -1864,23 +3280,6 @@ async def carinho_gif(interaction: discord.Interaction, membro: discord.Member):
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="cafune_gif", description="😴 Fazer cafuné com GIF")
-async def cafune_gif(interaction: discord.Interaction, membro: discord.Member):
-    if membro == interaction.user:
-        await interaction.response.send_message("❌ Você não pode fazer cafuné em si mesmo! 🥲")
-        return
-    
-    gif = random.choice(gifs_carinho)
-    
-    embed = discord.Embed(
-        title="😴 CAFUNÉ!",
-        description=f"{interaction.user.mention} fez cafuné em {membro.mention}!",
-        color=discord.Color.teal()
-    )
-    embed.set_image(url=gif)
-    
-    await interaction.response.send_message(embed=embed)
-
 @bot.tree.command(name="tapa", description="👋 Dar um tapa em alguém com GIF")
 async def tapa(interaction: discord.Interaction, membro: discord.Member):
     if membro == interaction.user:
@@ -1919,73 +3318,7 @@ async def festa(interaction: discord.Interaction, membro: Optional[discord.Membe
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="matar", description="💀 Matar alguém (brincadeira) com GIF")
-async def matar(interaction: discord.Interaction, membro: discord.Member):
-    if membro == interaction.user:
-        await interaction.response.send_message("❌ Você não pode se matar! 😱")
-        return
-    
-    gif = random.choice(gifs_matar)
-    
-    embed = discord.Embed(
-        title="💀 MORTE!",
-        description=f"{interaction.user.mention} matou {membro.mention}! (brincadeira 😅)",
-        color=discord.Color.dark_red()
-    )
-    embed.set_image(url=gif)
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="chifre", description="🦌 Dar chifre em alguém")
-async def chifre(interaction: discord.Interaction, membro: discord.Member):
-    embed = discord.Embed(
-        title="🦌 CHIFRE!",
-        description=f"{interaction.user.mention} deu chifre em {membro.mention}!",
-        color=discord.Color.green()
-    )
-    embed.set_image(url="https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif")
-    
-    await interaction.response.send_message(embed=embed)
-
-# ==================== OUTRAS FUNÇÕES LEGAIS ====================
-
-@bot.tree.command(name="moeda", description="🪙 Jogar uma moeda")
-async def moeda(interaction: discord.Interaction):
-    resultado = random.choice(["CARA", "COROA"])
-    await interaction.response.send_message(f"🪙 A moeda caiu: **{resultado}**!")
-
-@bot.tree.command(name="rps", description="🗿 Pedra, Papel ou Tesoura contra o bot")
-@app_commands.describe(escolha="Sua escolha")
-async def rps(interaction: discord.Interaction, escolha: str):
-    escolhas = ["pedra", "papel", "tesoura"]
-    if escolha.lower() not in escolhas:
-        await interaction.response.send_message("❌ Escolha: pedra, papel ou tesoura!")
-        return
-    
-    bot_choice = random.choice(escolhas)
-    
-    if escolha.lower() == bot_choice:
-        resultado = "Empate!"
-        cor = discord.Color.blue()
-    elif (escolha.lower() == "pedra" and bot_choice == "tesoura") or \
-         (escolha.lower() == "papel" and bot_choice == "pedra") or \
-         (escolha.lower() == "tesoura" and bot_choice == "papel"):
-        resultado = "Você ganhou!"
-        cor = discord.Color.green()
-    else:
-        resultado = "Você perdeu!"
-        cor = discord.Color.red()
-    
-    emojis = {"pedra": "🗿", "papel": "📄", "tesoura": "✂️"}
-    
-    embed = discord.Embed(
-        title="🗿📄✂️ Jokenpo",
-        description=f"Você: {emojis[escolha.lower()]}\nBot: {emojis[bot_choice]}",
-        color=cor
-    )
-    embed.add_field(name="Resultado", value=resultado)
-    
-    await interaction.response.send_message(embed=embed)
+# ===== COMANDOS DE JOGOS ADICIONAIS =====
 
 @bot.tree.command(name="dado_rpg", description="🎲 Rolar dados de RPG")
 @app_commands.describe(
@@ -2080,13 +3413,51 @@ async def enquete(
     for i in range(len(opcoes)):
         await message.add_reaction(emojis[i])
 
-# ==================== COMANDO DE AJUDA ATUALIZADO ====================
+@bot.tree.command(name="moeda", description="🪙 Jogar uma moeda")
+async def moeda(interaction: discord.Interaction):
+    resultado = random.choice(["CARA", "COROA"])
+    await interaction.response.send_message(f"🪙 A moeda caiu: **{resultado}**!")
 
-@bot.tree.command(name="ajuda", description="📚 Todos os comandos")
+@bot.tree.command(name="rps", description="🗿 Pedra, Papel ou Tesoura contra o bot")
+@app_commands.describe(escolha="Sua escolha")
+async def rps(interaction: discord.Interaction, escolha: str):
+    escolhas = ["pedra", "papel", "tesoura"]
+    if escolha.lower() not in escolhas:
+        await interaction.response.send_message("❌ Escolha: pedra, papel ou tesoura!")
+        return
+    
+    bot_choice = random.choice(escolhas)
+    
+    if escolha.lower() == bot_choice:
+        resultado = "Empate!"
+        cor = discord.Color.blue()
+    elif (escolha.lower() == "pedra" and bot_choice == "tesoura") or \
+         (escolha.lower() == "papel" and bot_choice == "pedra") or \
+         (escolha.lower() == "tesoura" and bot_choice == "papel"):
+        resultado = "Você ganhou!"
+        cor = discord.Color.green()
+    else:
+        resultado = "Você perdeu!"
+        cor = discord.Color.red()
+    
+    emojis = {"pedra": "🗿", "papel": "📄", "tesoura": "✂️"}
+    
+    embed = discord.Embed(
+        title="🗿📄✂️ Jokenpo",
+        description=f"Você: {emojis[escolha.lower()]}\nBot: {emojis[bot_choice]}",
+        color=cor
+    )
+    embed.add_field(name="Resultado", value=resultado)
+    
+    await interaction.response.send_message(embed=embed)
+
+# ===== COMANDO DE AJUDA ATUALIZADO =====
+
+@bot.tree.command(name="ajuda", description="📚 Todos os comandos do bot")
 async def ajuda(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📚 Comandos do Bot Fort",
-        description="**Sistema Completo - 70+ COMANDOS!**",
+        description="**Sistema Completo - 120+ COMANDOS!**\nUse `/` antes de cada comando",
         color=discord.Color.blue()
     )
     
@@ -2096,109 +3467,126 @@ async def ajuda(interaction: discord.Interaction):
               "`/chamada_info` - Ver informações\n"
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
-              "✨ **Timing:** Se não colocar horas, vence meia-noite!\n"
-              "✨ **Personalizado:** Pode escolher quantas horas dura",
+              "✨ Timing inteligente: meia-noite ou horas definidas",
         inline=False
     )
     
     embed.add_field(
-        name="💖 **SHIP**",
+        name="💖 **SHIP & CASAMENTO**",
         value="`/ship` - Calcular amor\n"
               "`/shippar` - Criar ship\n"
               "`/likeship` - Dar like\n"
-              "`/shipinfo` - Info do ship\n"
-              "`/meusships` - Seus ships\n"
               "`/topship` - Ranking\n"
-              "`/shiplist` - Listar ships\n"
-              "`/calcular_amor` - Análise detalhada\n",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="💒 **CASAMENTO**",
-        value="`/pedir` - Pedir\n"
-              "`/aceitar` - Aceitar\n"
-              "`/recusar` - Recusar\n"
-              "`/divorciar` - Divorciar\n"
+              "`/pedir` - Pedir em casamento\n"
               "`/casamento` - Status\n"
-              "`/presentear` - Presentear\n"
-              "`/aniversario` - Aniversário\n"
-              "`/luademel` - Lua de mel\n",
+              "`/presentear` - Dar presente\n"
+              "`/luademel` - Lua de mel",
         inline=True
     )
     
     embed.add_field(
         name="💰 **ECONOMIA**",
-        value="`/daily` - Daily\n"
+        value="`/daily` - Recompensa diária\n"
               "`/saldo` - Ver saldo\n"
               "`/transferir` - Transferir\n"
               "`/slot` - Caça-níqueis\n"
-              "`/dado` - Rolar dado\n"
-              "`/cara_coroa` - Cara ou coroa\n"
-              "`/ppt` - Pedra papel tesoura\n"
-              "`/adivinha` - Adivinhação\n",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="💝 **PRESENTES**",
-        value="`/loja_presentes` - Loja\n"
+              "`/cara_coroa` - Apostar\n"
+              "`/loja_presentes` - Loja\n"
               "`/comprar_presente` - Comprar\n"
-              "`/meuspresentes` - Inventário\n"
-              "`/signos` - Compatibilidade\n",
+              "`/meuspresentes` - Inventário",
         inline=True
     )
     
     embed.add_field(
-        name="🎭 **INTERAÇÕES COM GIF**",
+        name="🛡️ **MODERAÇÃO**",
+        value="`/clear` - Limpar mensagens\n"
+              "`/kick` - Expulsar\n"
+              "`/ban` - Banir\n"
+              "`/unban` - Desbanir\n"
+              "`/timeout` - Mutar\n"
+              "`/warn` - Avisar\n"
+              "`/warnings` - Ver avisos\n"
+              "`/lock` - Trancar canal\n"
+              "`/slowmode` - Modo lento",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎵 **MÚSICA**",
+        value="`/play` - Tocar música\n"
+              "`/queue` - Ver fila\n"
+              "`/skip` - Pular\n"
+              "`/stop` - Parar\n"
+              "`/pause` - Pausar\n"
+              "`/resume` - Continuar\n"
+              "`/volume` - Ajustar\n"
+              "`/loop` - Repetir",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🎭 **INTERAÇÕES**",
         value="`/abraco_gif` - Abraçar\n"
               "`/beijo_gif` - Beijar\n"
               "`/carinho_gif` - Carinho\n"
-              "`/cafune_gif` - Cafuné\n"
               "`/tapa` - Dar tapa\n"
-              "`/festa` - Fazer festa\n"
-              "`/matar` - Matar (brincadeira)\n"
-              "`/chifre` - Dar chifre\n",
+              "`/festa` - Fazer festa",
         inline=True
     )
     
     embed.add_field(
         name="🎮 **JOGOS**",
-        value="`/moeda` - Cara ou coroa\n"
-              "`/rps` - Pedra papel tesoura\n"
-              "`/dado_rpg` - Dados de RPG\n"
-              "`/sortear` - Sortear membro\n"
-              "`/enquete` - Criar enquete\n",
+        value="`/dado` - Rolar dado\n"
+              "`/dado_rpg` - Dados RPG\n"
+              "`/ppt` - Pedra papel\n"
+              "`/adivinha` - Adivinhação\n"
+              "`/8ball` - Perguntas\n"
+              "`/sortear` - Sortear\n"
+              "`/enquete` - Criar enquete",
         inline=True
     )
     
     embed.add_field(
-        name="🤖 **BÁSICOS**",
+        name="🛠️ **UTILIDADE**",
+        value="`/lembrete` - Criar lembrete\n"
+              "`/clima` - Ver clima\n"
+              "`/traduzir` - Tradutor\n"
+              "`/cep` - Buscar CEP\n"
+              "`/aniversario_membro` - Registrar\n"
+              "`/lembretes` - Ver lembretes",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="💭 **CRIATIVOS**",
+        value="`/frase` - Frase do dia\n"
+              "`/pensamento` - Pensamento\n"
+              "`/horoscopo` - Horóscopo\n"
+              "`/charada` - Charada\n"
+              "`/piada` - Piada\n"
+              "`/fato` - Fato curioso\n"
+              "`/conselho` - Conselho",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="ℹ️ **BÁSICOS**",
         value="`/ping` - Latência\n"
               "`/userinfo` - Info usuário\n"
               "`/serverinfo` - Info servidor\n"
               "`/avatar` - Ver avatar\n"
               "`/calcular` - Calculadora\n"
-              "`/ola_mundo` - Boas vindas\n",
+              "`/ajuda` - Este menu",
         inline=True
     )
     
-    embed.add_field(
-        name="🎮 **DIVERSÃO**",
-        value="`/8ball` - Perguntas\n"
-              "`/piada` - Piadas\n"
-              "`/conselho` - Conselhos\n"
-              "`/fato` - Fatos\n"
-              "`/baitola` - 🏳️‍🌈\n",
-        inline=True
-    )
-    
-    embed.set_footer(text="Total: 70+ comandos! Use / antes de cada comando")
+    embed.set_footer(text="Total: 120+ comandos! Bot em constante evolução")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     await interaction.response.send_message(embed=embed)
 
 # ==================== INICIAR BOT ====================
+
 async def main():
     print("🔵 INICIANDO FUNÇÃO MAIN")
     
@@ -2206,7 +3594,6 @@ async def main():
     
     if not token:
         print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
-        print("📌 Certifique-se de que a variável DISCORD_TOKEN está configurada")
         return
     
     print(f"🔵 Token encontrado! Conectando...")
@@ -2218,7 +3605,19 @@ async def main():
         print(f"❌ Erro: {e}")
 
 def run_bot():
-    print("🟢 INICIANDO BOT")
+    print("🟢 INICIANDO BOT FORT ULTIMATE")
+    print("="*60)
+    print("🚀 SISTEMAS CARREGADOS:")
+    print("✅ Sistema de Chamadas")
+    print("✅ Sistema de Ship e Casamento")
+    print("✅ Sistema de Economia e Jogos")
+    print("✅ Sistema de Moderação (novo!)")
+    print("✅ Sistema de Música (novo!)")
+    print("✅ Sistema de Utilidade (novo!)")
+    print("✅ Sistema Criativo (novo!)")
+    print("✅ 120+ COMANDOS NO TOTAL!")
+    print("="*60)
+    
     try:
         keep_alive()
         time.sleep(2)
@@ -2229,20 +3628,4 @@ def run_bot():
         print(f"❌ Erro fatal: {e}")
 
 if __name__ == "__main__":
-    print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA")
-    print("="*60)
-    print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas (com decoração perfeita)")
-    print("✅ Timing INTELIGENTE: se não colocar horas, vence meia-noite")
-    print("✅ Pode escolher quantas horas dura (horas_duracao)")
-    print("✅ O horário da chamada é o que você digitar em data_hora")
-    print("✅ Sistema de Ship (likes, ranking)")
-    print("✅ Sistema de Casamento (com economia)")
-    print("✅ Sistema de Presentes e Signos")
-    print("✅ Sistema de Economia (daily, slots)")
-    print("✅ Comandos com GIF (abraço, beijo, etc)")
-    print("✅ 70+ COMANDOS NO TOTAL!")
-    print("="*60)
-    
     run_bot()
