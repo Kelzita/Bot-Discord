@@ -14,7 +14,6 @@ import os
 import time
 import logging
 import traceback
-import requests
 from collections import defaultdict
 import re
 
@@ -3629,3 +3628,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
