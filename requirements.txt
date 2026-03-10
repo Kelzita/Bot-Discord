@@ -1,5 +1,5 @@
 discord.py==2.3.2
 aiohttp==3.9.5
 flask==3.0.3
-requests==2.31.0
 yt-dlp==2024.4.9
+
