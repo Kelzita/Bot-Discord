@@ -1,6 +1,7 @@
 discord.py==2.3.2
+aiohttp==3.8.6
 flask==2.3.3
-aiohttp==3.9.1
+yt-dlp==2024.4.9
 requests==2.31.0
 
 
