@@ -16,7 +16,6 @@ import logging
 import traceback
 
 # ===== CONFIGURAÇÃO DO TOKEN =====
-# Pega o token das variáveis de ambiente
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 
 # ===== IMPORTS DO SERVIDOR WEB =====
@@ -48,14 +47,11 @@ def ping():
     return "pong", 200
 
 def run_webserver():
-    """Inicia o servidor web - usa a porta do ambiente"""
-    # No Vercel, a porta é fornecida pela variável PORT
-    port = int(os.environ.get('PORT', 8080))  # 8080 é a padrão do Vercel
+    port = int(os.environ.get('PORT', 8080))
     print(f"📡 Iniciando servidor web na porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
 
 def keep_alive():
-    """Mantém o bot vivo"""
     server = threading.Thread(target=run_webserver, daemon=True)
     server.start()
     print(f"✅ Servidor web configurado")
@@ -82,13 +78,15 @@ class Fort(discord.Client):
         self.call_data = {}
         self.call_participants = {}
         
+        # Tasks ativas
+        self.active_tasks = {}
+        
         # Inicializa banco de dados e carrega dados
         self.init_database()
         self.load_data()
     
     # ===== FUNÇÕES SQLITE =====
     def init_database(self):
-        """Cria o banco de dados SQLite"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
@@ -106,7 +104,6 @@ class Fort(discord.Client):
         print("✅ Banco de dados SQLite inicializado!")
     
     def load_data(self):
-        """Carrega dados do SQLite"""
         conn = sqlite3.connect('fort_bot.db')
         c = conn.cursor()
         
@@ -205,12 +202,48 @@ class Fort(discord.Client):
     async def setup_hook(self):
         await self.tree.sync()
         print(f"✅ Comandos sincronizados!")
+        
+        # Recriar tasks para chamadas ativas ao reiniciar
+        await self.restaurar_chamadas_ativas()
+
+    async def restaurar_chamadas_ativas(self):
+        """Restaura as tasks de chamadas ativas quando o bot reinicia"""
+        agora = datetime.now()
+        calls_remover = []
+        
+        for call_id, call_data in self.call_data.items():
+            try:
+                expira_em = datetime.fromisoformat(call_data['expira_em'])
+                
+                if expira_em <= agora:
+                    # Chamada já expirou
+                    print(f"⏰ Chamada {call_id} já expirou, removendo...")
+                    calls_remover.append(call_id)
+                else:
+                    # Chamada ainda ativa, recriar task
+                    print(f"🔄 Recriando task para chamada {call_id} - Expira em {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+                    task = asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
+                    self.active_tasks[call_id] = task
+            except Exception as e:
+                print(f"❌ Erro ao restaurar chamada {call_id}: {e}")
+                calls_remover.append(call_id)
+        
+        # Remover chamadas expiradas
+        for call_id in calls_remover:
+            if call_id in self.call_data:
+                del self.call_data[call_id]
+            if call_id in self.call_participants:
+                del self.call_participants[call_id]
+        
+        if calls_remover:
+            self.save_data()
+            print(f"✅ {len(calls_remover)} chamadas expiradas removidas")
 
     async def on_ready(self):
         print(f"✅ Bot {self.user} ligado com sucesso!")
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
-        print(f"📢 Sistema de Chamadas: ATIVO (timing opcional)")
+        print(f"📢 Chamadas ativas: {len(self.call_data)}")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
@@ -221,13 +254,13 @@ class Fort(discord.Client):
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS COM TIMING INTELIGENTE ====================
+# ==================== SISTEMA DE CHAMADAS CORRIGIDO ====================
 
 def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
     """
     Calcula o tempo de expiração da chamada:
     - Se horas_limite for fornecido: expira após X horas
-    - Se não for fornecido: expira à meia-noite (23:59:59)
+    - Se não for fornecido: expira à meia-noite do dia atual (23:59:59)
     """
     agora = datetime.now()
     
@@ -243,9 +276,9 @@ def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
         # Se já passou da meia-noite de hoje, vai para amanhã
         if agora > meia_noite:
             meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-            print(f"🌙 Já passou da meia-noite, ajustando para amanhã: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
+            print(f"🌙 Já passou da meia-noite de hoje, ajustando para amanhã: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
         else:
-            print(f"🌙 Meia-noite de hoje: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
+            print(f"🌙 Chamada expira hoje à meia-noite: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
         
         print(f"⏳ Tempo restante até meia-noite: {meia_noite - agora}")
         
@@ -312,7 +345,7 @@ class CallButton(Button):
                         
                         # Define o texto do timing
                         if call.get('horas_duracao'):
-                            timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s)"
+                            timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s) (às {self.expira_em.strftime('%H:%M')})"
                         else:
                             timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
                         
@@ -399,19 +432,15 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
         print(f"⏰ Iniciando contador para chamada {call_id}")
         print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
         
-        while True:
-            agora = datetime.now()
-            tempo_restante = (expira_em - agora).total_seconds()
-            
-            if tempo_restante <= 0:
-                print(f"✅ Tempo esgotado para chamada {call_id}")
-                break
-            
-            print(f"⏳ Chamada {call_id}: {tempo_restante:.0f}s restantes")
-            
-            # Espera até o momento da expiração (máximo 30 minutos por vez)
-            espera = min(tempo_restante, 1800)  # 30 minutos
-            await asyncio.sleep(espera)
+        # Calcula tempo restante
+        agora = datetime.now()
+        tempo_restante = (expira_em - agora).total_seconds()
+        
+        if tempo_restante > 0:
+            print(f"⏳ Aguardando {tempo_restante:.0f} segundos até expiração...")
+            await asyncio.sleep(tempo_restante)
+        
+        print(f"✅ Tempo esgotado para chamada {call_id}")
         
         # ENCERRA A CHAMADA
         if call_id not in bot.call_data:
@@ -437,7 +466,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     participantes_text = ""
                     if participantes:
                         participantes_list = []
-                        for pid in participantes[:20]:  # Limite de 20 para não estourar
+                        for pid in participantes[:20]:
                             member = channel.guild.get_member(int(pid))
                             if member:
                                 participantes_list.append(f"• {member.mention}")
@@ -457,7 +486,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     
                     embed_final.add_field(
                         name="✅ LISTA FINAL",
-                        value=participantes_text[:1024],  # Limite do Discord
+                        value=participantes_text[:1024],
                         inline=False
                     )
                     
@@ -475,10 +504,15 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
             del bot.call_data[call_id]
         if call_id in bot.call_participants:
             del bot.call_participants[call_id]
+        if call_id in bot.active_tasks:
+            del bot.active_tasks[call_id]
+        
         bot.save_data()
         
         print(f"✅ Chamada {call_id} encerrada com sucesso!")
         
+    except asyncio.CancelledError:
+        print(f"⏹️ Task da chamada {call_id} foi cancelada")
     except Exception as e:
         print(f"❌ Erro ao encerrar chamada: {e}")
         traceback.print_exc()
@@ -509,20 +543,8 @@ async def chamada(
         await interaction.response.send_message("❌ O bot precisa da permissão `Mencionar @everyone`!", ephemeral=True)
         return
     
-    # Calcula tempo de expiração baseado na escolha do usuário
+    # Calcula tempo de expiração
     expira_em = calcular_tempo_expiracao(horas_duracao)
-    
-    # VERIFICAÇÃO: Se for meia-noite e já passou, ajusta para amanhã
-    agora = datetime.now()
-    if expira_em <= agora:
-        if horas_duracao:
-            # Se passou do tempo com horas definidas, adiciona mais 1 hora
-            expira_em = agora + timedelta(hours=1)
-            print(f"⚠️ Tempo já passou, ajustando para +1h: {expira_em}")
-        else:
-            # Se for meia-noite e já passou, vai para amanhã
-            expira_em = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-            print(f"⚠️ Meia-noite já passou, ajustando para amanhã: {expira_em}")
     
     call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
     data_atual = datetime.now().strftime("%d.%m")
@@ -533,7 +555,7 @@ async def chamada(
     else:
         timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
     
-    # Monta o embed com a decoração
+    # Monta o embed
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
 ५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
@@ -637,7 +659,8 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     await interaction.followup.send(embed=embed_confirm, ephemeral=True)
     
     # Agenda o encerramento
-    asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
+    task = asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
+    bot.active_tasks[call_id] = task
     
     print(f"✅ Chamada criada: {call_id}")
     print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
@@ -781,6 +804,11 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
         await interaction.response.send_message("❌ Só o criador ou admin pode cancelar!", ephemeral=True)
         return
     
+    # Cancela a task se estiver ativa
+    if call_id in bot.active_tasks:
+        bot.active_tasks[call_id].cancel()
+        del bot.active_tasks[call_id]
+    
     try:
         channel = bot.get_channel(int(data['channel_id']))
         if channel:
@@ -801,6 +829,48 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
     
     bot.save_data()
     await interaction.response.send_message("✅ Chamada cancelada!", ephemeral=True)
+
+@bot.tree.command(name="chamada_listar_ativas", description="📋 Listar todas as chamadas ativas")
+async def chamada_listar_ativas(interaction: discord.Interaction):
+    """Lista todas as chamadas ativas no servidor"""
+    agora = datetime.now()
+    ativas = []
+    
+    for call_id, data in bot.call_data.items():
+        if data.get('channel_id') == str(interaction.channel.id):
+            expira_em = datetime.fromisoformat(data['expira_em'])
+            if expira_em > agora:
+                ativas.append((call_id, data, expira_em))
+    
+    if not ativas:
+        await interaction.response.send_message("📋 Nenhuma chamada ativa neste canal!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Chamadas Ativas",
+        description=f"Total: {len(ativas)} chamada(s)",
+        color=discord.Color.green()
+    )
+    
+    for call_id, data, expira_em in ativas:
+        participantes = len(bot.call_participants.get(call_id, []))
+        
+        if data.get('horas_duracao'):
+            tempo = f"Expira em {data['horas_duracao']}h"
+        else:
+            tempo = f"Expira às 23:59"
+        
+        tempo_restante = expira_em - agora
+        horas = int(tempo_restante.total_seconds() // 3600)
+        minutos = int((tempo_restante.total_seconds() % 3600) // 60)
+        
+        embed.add_field(
+            name=f"📢 {data['titulo'][:30]}",
+            value=f"📅 {data['data_hora']}\n✅ {participantes} confirmados\n⏰ {tempo} (restam {horas}h {minutos}m)\n📝 `{data['message_id']}`",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==================== SISTEMA DE SHIP COMPLETO ====================
 
@@ -1697,7 +1767,7 @@ async def calcular(interaction: discord.Interaction, num1: float, operador: str,
 async def ola_mundo(interaction: discord.Interaction):
     await interaction.response.send_message(f"Olá {interaction.user.mention}! Bem-vindo ao bot Fort! 🎉")
 
-# ==================== COMANDOS DE DIVERSÃO (ANTIGOS) ====================
+# ==================== COMANDOS DE DIVERSÃO ====================
 
 @bot.tree.command(name="8ball", description="🎱 Pergunte ao destino")
 async def eight_ball(interaction: discord.Interaction, pergunta: str):
@@ -1810,8 +1880,6 @@ gifs_matar = [
     "https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif",
     "https://media.giphy.com/media/3o7abBOGh2Lq3qFjm/giphy.gif"
 ]
-
-# ===== NOVOS COMANDOS DE INTERAÇÃO COM GIF =====
 
 @bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
 async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
@@ -2096,6 +2164,7 @@ async def ajuda(interaction: discord.Interaction):
               "`/chamada_info` - Ver informações\n"
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
+              "`/chamada_listar_ativas` - Listar ativas\n"
               "✨ **Timing:** Se não colocar horas, vence meia-noite!\n"
               "✨ **Personalizado:** Pode escolher quantas horas dura",
         inline=False
@@ -2205,8 +2274,7 @@ async def main():
     token = os.environ.get('DISCORD_TOKEN')
     
     if not token:
-        print("❌ ERRO CRÍTICO: Token não encontrado nas variáveis de ambiente!")
-        print("📌 Certifique-se de que a variável DISCORD_TOKEN está configurada")
+        print("❌ ERRO CRÍTICO: Token não encontrado!")
         return
     
     print(f"🔵 Token encontrado! Conectando...")
@@ -2230,13 +2298,12 @@ def run_bot():
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA")
+    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA CORRIGIDA")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas (com decoração perfeita)")
-    print("✅ Timing INTELIGENTE: se não colocar horas, vence meia-noite")
-    print("✅ Pode escolher quantas horas dura (horas_duracao)")
-    print("✅ O horário da chamada é o que você digitar em data_hora")
+    print("✅ Sistema de Chamadas CORRIGIDO - Expira à meia-noite!")
+    print("✅ Tasks persistentes - Mantém chamadas após reinicialização")
+    print("✅ Timing INTELIGENTE funcionando perfeitamente")
     print("✅ Sistema de Ship (likes, ranking)")
     print("✅ Sistema de Casamento (com economia)")
     print("✅ Sistema de Presentes e Signos")
@@ -2246,5 +2313,3 @@ if __name__ == "__main__":
     print("="*60)
     
     run_bot()
-
-
