@@ -260,27 +260,21 @@ def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
     """
     Calcula o tempo de expiração da chamada:
     - Se horas_limite for fornecido: expira após X horas
-    - Se não for fornecido: expira à meia-noite do dia atual (23:59:59)
+    - Se NÃO for fornecido: expira SEMPRE hoje às 23:59:59 (MEIA-NOITE)
     """
     agora = datetime.now()
     
     if horas_limite is not None and horas_limite > 0:
         # Expira após X horas
         expira_em = agora + timedelta(hours=horas_limite)
-        print(f"⏰ Chamada com duração de {horas_limite}h: expira às {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+        print(f"⏰ [DEBUG] Chamada com DURAÇÃO de {horas_limite}h: expira {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
         return expira_em
     else:
-        # CRIA MEIA-NOITE DO DIA ATUAL (23:59:59)
+        # CRIA MEIA-NOITE DO DIA ATUAL (23:59:59) - SEMPRE HOJE, NUNCA AMANHÃ!
         meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
         
-        # Se já passou da meia-noite de hoje, vai para amanhã
-        if agora > meia_noite:
-            meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59) + timedelta(days=1)
-            print(f"🌙 Já passou da meia-noite de hoje, ajustando para amanhã: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
-        else:
-            print(f"🌙 Chamada expira hoje à meia-noite: {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
-        
-        print(f"⏳ Tempo restante até meia-noite: {meia_noite - agora}")
+        print(f"🌙 [DEBUG] Chamada SEM DURAÇÃO: expira HOJE {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
+        print(f"⏳ [DEBUG] Tempo restante até meia-noite de HOJE: {meia_noite - agora}")
         
         return meia_noite
 
@@ -347,7 +341,7 @@ class CallButton(Button):
                         if call.get('horas_duracao'):
                             timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s) (às {self.expira_em.strftime('%H:%M')})"
                         else:
-                            timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
+                            timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
                         
                         descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
@@ -461,7 +455,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     if call.get('horas_duracao'):
                         motivo = f"APÓS {call['horas_duracao']} HORA(S)"
                     else:
-                        motivo = "À MEIA-NOITE"
+                        motivo = "À MEIA-NOITE (23:59)"
                     
                     participantes_text = ""
                     if participantes:
@@ -522,7 +516,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
     titulo="Título do evento",
     data_hora="Data e hora (ex: 15:40 ou 25/12 20h)",
     local="Local do evento",
-    horas_duracao="Horas para expirar (opcional - se não colocar, vence meia-noite)",
+    horas_duracao="Horas para expirar (opcional - se NÃO colocar, vence MEIA-NOITE 23:59)",
     descricao="Descrição adicional (opcional)",
     emoji="Emoji do botão (padrão: ✅)"
 )
@@ -553,7 +547,7 @@ async def chamada(
     if horas_duracao:
         timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
     else:
-        timing_text = f"🌙 Expira à meia-noite (hoje às 23:59)"
+        timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
     
     # Monta o embed
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
@@ -630,7 +624,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     if horas_duracao:
         confirm_msg = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
     else:
-        confirm_msg = f"🌙 Expira à meia-noite (hoje às 23:59)"
+        confirm_msg = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
     
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
@@ -689,7 +683,7 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
                 if data.get('horas_duracao'):
                     status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
                 else:
-                    status = "🟢 Ativa (vence meia-noite)"
+                    status = "🟢 Ativa (vence HOJE 23:59)"
             else:
                 status = "🔴 Encerrada"
             
@@ -720,7 +714,7 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
         if data.get('horas_duracao'):
             status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
         else:
-            status = "🟢 Ativa (vence meia-noite)"
+            status = "🟢 Ativa (vence HOJE 23:59)"
     else:
         status = "🔴 Encerrada"
     
@@ -858,7 +852,7 @@ async def chamada_listar_ativas(interaction: discord.Interaction):
         if data.get('horas_duracao'):
             tempo = f"Expira em {data['horas_duracao']}h"
         else:
-            tempo = f"Expira às 23:59"
+            tempo = f"Expira HOJE 23:59"
         
         tempo_restante = expira_em - agora
         horas = int(tempo_restante.total_seconds() // 3600)
@@ -2165,8 +2159,8 @@ async def ajuda(interaction: discord.Interaction):
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
               "`/chamada_listar_ativas` - Listar ativas\n"
-              "✨ **Timing:** Se não colocar horas, vence meia-noite!\n"
-              "✨ **Personalizado:** Pode escolher quantas horas dura",
+              "✨ **SEM horas: vence HOJE 23:59 (MEIA-NOITE)!**\n"
+              "✨ **COM horas: vence após X horas**",
         inline=False
     )
     
@@ -2301,7 +2295,7 @@ if __name__ == "__main__":
     print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA CORRIGIDA")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas CORRIGIDO - Expira à meia-noite!")
+    print("✅ Sistema de Chamadas CORRIGIDO - Expira HOJE 23:59!")
     print("✅ Tasks persistentes - Mantém chamadas após reinicialização")
     print("✅ Timing INTELIGENTE funcionando perfeitamente")
     print("✅ Sistema de Ship (likes, ranking)")
