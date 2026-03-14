@@ -6,7 +6,7 @@ import random
 import json
 import aiohttp
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import math
 import sqlite3
@@ -15,8 +15,11 @@ import time
 import logging
 import traceback
 
-# ===== CONFIGURAÇÃO DO TOKEN =====
+# ===== CONFIGURAÇÃO DO TOKEN E FUSO HORÁRIO =====
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
+
+# Fuso horário de Brasília (UTC-3)
+BR_TZ = timezone(timedelta(hours=-3))
 
 # ===== IMPORTS DO SERVIDOR WEB =====
 from flask import Flask, jsonify
@@ -116,7 +119,7 @@ class Fort(discord.Client):
         c.execute('SELECT user_id, data FROM divorce_cooldowns')
         self.divorce_cooldowns = {}
         for user_id, data in c.fetchall():
-            self.divorce_cooldowns[user_id] = datetime.fromisoformat(data) if data else None
+            self.divorce_cooldowns[user_id] = datetime.fromisoformat(data).replace(tzinfo=BR_TZ) if data else None
         
         c.execute('SELECT tipo, dados FROM dados_json')
         for tipo, dados_json in c.fetchall():
@@ -208,12 +211,12 @@ class Fort(discord.Client):
 
     async def restaurar_chamadas_ativas(self):
         """Restaura as tasks de chamadas ativas quando o bot reinicia"""
-        agora = datetime.now()
+        agora = datetime.now(BR_TZ)
         calls_remover = []
         
         for call_id, call_data in self.call_data.items():
             try:
-                expira_em = datetime.fromisoformat(call_data['expira_em'])
+                expira_em = datetime.fromisoformat(call_data['expira_em']).replace(tzinfo=BR_TZ)
                 
                 if expira_em <= agora:
                     # Chamada já expirou
@@ -221,7 +224,7 @@ class Fort(discord.Client):
                     calls_remover.append(call_id)
                 else:
                     # Chamada ainda ativa, recriar task
-                    print(f"🔄 Recriando task para chamada {call_id} - Expira em {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+                    print(f"🔄 Recriando task para chamada {call_id} - Expira em {expira_em.strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
                     task = asyncio.create_task(encerrar_chamada_apos_tempo(call_id, expira_em))
                     self.active_tasks[call_id] = task
             except Exception as e:
@@ -250,31 +253,36 @@ class Fort(discord.Client):
         print(f"🎮 Sistema de Jogos: ATIVO")
         print(f"🎭 Comandos com GIF: ATIVO")
         print(f"💾 Banco de Dados: SQLite")
+        print(f"⏰ Fuso Horário: Brasília (UTC-3)")
+        print(f"⏰ Horário atual: {datetime.now(BR_TZ).strftime('%d/%m/%Y %H:%M:%S')}")
         await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 70+ comandos!"))
 
 bot = Fort()
 
-# ==================== SISTEMA DE CHAMADAS CORRIGIDO ====================
+# ==================== SISTEMA DE CHAMADAS CORRIGIDO COM FUSO BRASIL ====================
 
 def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
     """
-    Calcula o tempo de expiração da chamada:
+    Calcula o tempo de expiração da chamada no HORÁRIO DE BRASÍLIA:
     - Se horas_limite for fornecido: expira após X horas
     - Se NÃO for fornecido: expira SEMPRE hoje às 23:59:59 (MEIA-NOITE)
     """
-    agora = datetime.now()
+    agora = datetime.now(BR_TZ)
+    
+    print(f"🔍 DEBUG - horas_limite recebido: {horas_limite}")
+    print(f"🔍 DEBUG - agora (Brasília): {agora.strftime('%d/%m/%Y %H:%M:%S')}")
     
     if horas_limite is not None and horas_limite > 0:
         # Expira após X horas
         expira_em = agora + timedelta(hours=horas_limite)
-        print(f"⏰ [DEBUG] Chamada com DURAÇÃO de {horas_limite}h: expira {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+        print(f"⏰ Chamada com DURAÇÃO de {horas_limite}h: expira {expira_em.strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
         return expira_em
     else:
         # CRIA MEIA-NOITE DO DIA ATUAL (23:59:59) - SEMPRE HOJE, NUNCA AMANHÃ!
-        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59)
+        meia_noite = datetime(agora.year, agora.month, agora.day, 23, 59, 59, tzinfo=BR_TZ)
         
-        print(f"🌙 [DEBUG] Chamada SEM DURAÇÃO: expira HOJE {meia_noite.strftime('%d/%m/%Y %H:%M:%S')}")
-        print(f"⏳ [DEBUG] Tempo restante até meia-noite de HOJE: {meia_noite - agora}")
+        print(f"🌙 Chamada SEM DURAÇÃO: expira HOJE {meia_noite.strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
+        print(f"⏳ Tempo restante até meia-noite de HOJE: {meia_noite - agora}")
         
         return meia_noite
 
@@ -290,7 +298,9 @@ class CallButton(Button):
         self.expira_em = expira_em
     
     async def callback(self, interaction: discord.Interaction):
-        if datetime.now() > self.expira_em:
+        agora = datetime.now(BR_TZ)
+        
+        if agora > self.expira_em:
             await interaction.response.send_message("⏰ **Esta chamada EXPIROU!**", ephemeral=True)
             return
             
@@ -335,13 +345,13 @@ class CallButton(Button):
                         else:
                             participantes_text = "Ninguém confirmou ainda"
                         
-                        data_atual = datetime.now().strftime("%d.%m")
+                        data_atual = datetime.now(BR_TZ).strftime("%d.%m")
                         
                         # Define o texto do timing
                         if call.get('horas_duracao'):
-                            timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s) (às {self.expira_em.strftime('%H:%M')})"
+                            timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s) (às {self.expira_em.strftime('%H:%M')} Brasília)"
                         else:
-                            timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
+                            timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE Brasília)"
                         
                         descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
 
@@ -382,7 +392,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
                             embed.set_thumbnail(url=interaction.guild.icon.url)
                         
                         embed.set_footer(text="Clique no botão abaixo para confirmar sua presença!")
-                        embed.timestamp = datetime.now()
+                        embed.timestamp = datetime.now(BR_TZ)
                         
                         await message.edit(embed=embed)
             except Exception as e:
@@ -424,10 +434,10 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
     """Encerra a chamada após o tempo limite"""
     try:
         print(f"⏰ Iniciando contador para chamada {call_id}")
-        print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+        print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
         
         # Calcula tempo restante
-        agora = datetime.now()
+        agora = datetime.now(BR_TZ)
         tempo_restante = (expira_em - agora).total_seconds()
         
         if tempo_restante > 0:
@@ -455,7 +465,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     if call.get('horas_duracao'):
                         motivo = f"APÓS {call['horas_duracao']} HORA(S)"
                     else:
-                        motivo = "À MEIA-NOITE (23:59)"
+                        motivo = "À MEIA-NOITE (23:59 Brasília)"
                     
                     participantes_text = ""
                     if participantes:
@@ -484,8 +494,9 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                         inline=False
                     )
                     
-                    embed_final.set_footer(text=f"Encerrada em {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-                    embed_final.timestamp = datetime.now()
+                    encerrado_em = datetime.now(BR_TZ)
+                    embed_final.set_footer(text=f"Encerrada em {encerrado_em.strftime('%d/%m/%Y %H:%M')} (Brasília)")
+                    embed_final.timestamp = encerrado_em
                     
                     await message.edit(embed=embed_final, view=None)
                     await channel.send(f"⏰ **Chamada encerrada!** Total de {len(participantes)} presente(s)! 📊")
@@ -516,7 +527,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
     titulo="Título do evento",
     data_hora="Data e hora (ex: 15:40 ou 25/12 20h)",
     local="Local do evento",
-    horas_duracao="Horas para expirar (opcional - se NÃO colocar, vence MEIA-NOITE 23:59)",
+    horas_duracao="Horas para expirar (opcional - se NÃO colocar, vence MEIA-NOITE 23:59 Brasília)",
     descricao="Descrição adicional (opcional)",
     emoji="Emoji do botão (padrão: ✅)"
 )
@@ -540,14 +551,14 @@ async def chamada(
     # Calcula tempo de expiração
     expira_em = calcular_tempo_expiracao(horas_duracao)
     
-    call_id = f"{interaction.channel.id}-{int(datetime.now().timestamp())}"
-    data_atual = datetime.now().strftime("%d.%m")
+    call_id = f"{interaction.channel.id}-{int(datetime.now(BR_TZ).timestamp())}"
+    data_atual = datetime.now(BR_TZ).strftime("%d.%m")
     
     # Texto do timing para mostrar no embed
     if horas_duracao:
-        timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
+        timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')} Brasília)"
     else:
-        timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
+        timing_text = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE Brasília)"
     
     # Monta o embed
     descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
@@ -589,7 +600,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
         embed.set_thumbnail(url=interaction.guild.icon.url)
     
     embed.set_footer(text="Clique no botão abaixo para confirmar sua presença!")
-    embed.timestamp = datetime.now()
+    embed.timestamp = datetime.now(BR_TZ)
     
     view = CallView(call_id, emoji, expira_em)
     
@@ -613,7 +624,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
         'message_id': str(message.id),
         'emoji': emoji,
         'expira_em': expira_em.isoformat(),
-        'criado_em': datetime.now().isoformat(),
+        'criado_em': datetime.now(BR_TZ).isoformat(),
         'horas_duracao': horas_duracao
     }
     
@@ -622,9 +633,9 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     # Mensagem de confirmação
     if horas_duracao:
-        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')})"
+        confirm_msg = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')} Brasília)"
     else:
-        confirm_msg = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE)"
+        confirm_msg = f"🌙 Expira HOJE às 23:59 (MEIA-NOITE Brasília)"
     
     embed_confirm = discord.Embed(
         title="✅ Chamada Criada!",
@@ -646,7 +657,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     
     embed_confirm.add_field(
         name="⏱️ Expira em",
-        value=expira_em.strftime("%d/%m/%Y %H:%M"),
+        value=expira_em.strftime("%d/%m/%Y %H:%M") + " (Brasília)",
         inline=True
     )
     
@@ -657,7 +668,7 @@ Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vo
     bot.active_tasks[call_id] = task
     
     print(f"✅ Chamada criada: {call_id}")
-    print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"📅 Expira em: {expira_em.strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
 
 @bot.tree.command(name="chamada_info", description="ℹ️ Ver informações de uma chamada")
 async def chamada_info(interaction: discord.Interaction, message_id: str = None):
@@ -677,13 +688,13 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
         
         for cid, data in calls[:5]:
             participantes = len(bot.call_participants.get(cid, []))
-            expira_em = datetime.fromisoformat(data['expira_em'])
+            expira_em = datetime.fromisoformat(data['expira_em']).replace(tzinfo=BR_TZ)
             
-            if expira_em > datetime.now():
+            if expira_em > datetime.now(BR_TZ):
                 if data.get('horas_duracao'):
                     status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
                 else:
-                    status = "🟢 Ativa (vence HOJE 23:59)"
+                    status = "🟢 Ativa (vence HOJE 23:59 Brasília)"
             else:
                 status = "🔴 Encerrada"
             
@@ -708,13 +719,13 @@ async def chamada_info(interaction: discord.Interaction, message_id: str = None)
     
     data = bot.call_data[call_id]
     participantes = bot.call_participants.get(call_id, [])
-    expira_em = datetime.fromisoformat(data['expira_em'])
+    expira_em = datetime.fromisoformat(data['expira_em']).replace(tzinfo=BR_TZ)
     
-    if expira_em > datetime.now():
+    if expira_em > datetime.now(BR_TZ):
         if data.get('horas_duracao'):
             status = f"🟢 Ativa (expira em {data['horas_duracao']}h)"
         else:
-            status = "🟢 Ativa (vence HOJE 23:59)"
+            status = "🟢 Ativa (vence HOJE 23:59 Brasília)"
     else:
         status = "🔴 Encerrada"
     
@@ -827,12 +838,12 @@ async def chamada_cancelar(interaction: discord.Interaction, message_id: str):
 @bot.tree.command(name="chamada_listar_ativas", description="📋 Listar todas as chamadas ativas")
 async def chamada_listar_ativas(interaction: discord.Interaction):
     """Lista todas as chamadas ativas no servidor"""
-    agora = datetime.now()
+    agora = datetime.now(BR_TZ)
     ativas = []
     
     for call_id, data in bot.call_data.items():
         if data.get('channel_id') == str(interaction.channel.id):
-            expira_em = datetime.fromisoformat(data['expira_em'])
+            expira_em = datetime.fromisoformat(data['expira_em']).replace(tzinfo=BR_TZ)
             if expira_em > agora:
                 ativas.append((call_id, data, expira_em))
     
@@ -852,7 +863,7 @@ async def chamada_listar_ativas(interaction: discord.Interaction):
         if data.get('horas_duracao'):
             tempo = f"Expira em {data['horas_duracao']}h"
         else:
-            tempo = f"Expira HOJE 23:59"
+            tempo = f"Expira HOJE 23:59 Brasília"
         
         tempo_restante = expira_em - agora
         horas = int(tempo_restante.total_seconds() // 3600)
@@ -879,8 +890,8 @@ async def ship(interaction: discord.Interaction, pessoa1: discord.Member, pessoa
     if len(cargos_comuns) > 1:
         base += len(cargos_comuns) * 2
     
-    idade_p1 = (datetime.now() - pessoa1.created_at).days
-    idade_p2 = (datetime.now() - pessoa2.created_at).days
+    idade_p1 = (datetime.now(BR_TZ) - pessoa1.created_at.replace(tzinfo=BR_TZ)).days
+    idade_p2 = (datetime.now(BR_TZ) - pessoa2.created_at.replace(tzinfo=BR_TZ)).days
     if abs(idade_p1 - idade_p2) < 30:
         base += 3
     
@@ -949,7 +960,7 @@ async def shippar(interaction: discord.Interaction, pessoa1: discord.Member, pes
         "pessoa2": str(pessoa2.id),
         "likes": 0,
         "criado_por": str(interaction.user.id),
-        "data": datetime.now().isoformat()
+        "data": datetime.now(BR_TZ).isoformat()
     }
     
     bot.save_data()
@@ -996,7 +1007,7 @@ async def shipinfo(interaction: discord.Interaction, pessoa1: discord.Member, pe
     
     embed.add_field(name="👍 Likes", value=data["likes"], inline=True)
     embed.add_field(name="👤 Criador", value=criador.mention if criador else "Desconhecido", inline=True)
-    embed.add_field(name="📅 Data", value=datetime.fromisoformat(data["data"]).strftime("%d/%m/%Y"), inline=True)
+    embed.add_field(name="📅 Data", value=datetime.fromisoformat(data["data"]).replace(tzinfo=BR_TZ).strftime("%d/%m/%Y"), inline=True)
     
     await interaction.response.send_message(embed=embed)
 
@@ -1156,12 +1167,12 @@ async def aceitar(interaction: discord.Interaction, pessoa: discord.Member):
     user_id = str(interaction.user.id)
     pessoa_id = str(pessoa.id)
     
-    marriage_id = f"{pessoa_id}-{user_id}-{datetime.now().timestamp()}"
+    marriage_id = f"{pessoa_id}-{user_id}-{datetime.now(BR_TZ).timestamp()}"
     
     bot.marriage_data[marriage_id] = {
         "pessoa1": pessoa_id,
         "pessoa2": user_id,
-        "data_casamento": datetime.now().isoformat(),
+        "data_casamento": datetime.now(BR_TZ).isoformat(),
         "aniversarios_comemorados": 0,
         "luademel": True,
         "presentes": []
@@ -1215,7 +1226,7 @@ async def divorciar(interaction: discord.Interaction):
         return
     
     if user_id in bot.divorce_cooldowns:
-        if datetime.now() - bot.divorce_cooldowns[user_id] < timedelta(days=7):
+        if datetime.now(BR_TZ) - bot.divorce_cooldowns[user_id] < timedelta(days=7):
             await interaction.response.send_message("❌ Aguarde 7 dias!")
             return
     
@@ -1224,7 +1235,7 @@ async def divorciar(interaction: discord.Interaction):
         return
     
     bot.user_balances[user_id] -= 5000
-    bot.divorce_cooldowns[user_id] = datetime.now()
+    bot.divorce_cooldowns[user_id] = datetime.now(BR_TZ)
     
     del bot.marriage_data[casamento_id]
     bot.save_data()
@@ -1252,8 +1263,8 @@ async def casamento(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Cônjuge não encontrado!")
         return
     
-    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"])
-    tempo_casado = datetime.now() - data_casamento
+    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"]).replace(tzinfo=BR_TZ)
+    tempo_casado = datetime.now(BR_TZ) - data_casamento
     
     dias = tempo_casado.days
     horas = tempo_casado.seconds // 3600
@@ -1317,8 +1328,8 @@ async def aniversario(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Você não está casado!")
         return
     
-    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"])
-    hoje = datetime.now()
+    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"]).replace(tzinfo=BR_TZ)
+    hoje = datetime.now(BR_TZ)
     
     if hoje.month == data_casamento.month and hoje.day == data_casamento.day:
         anos = hoje.year - data_casamento.year
@@ -1369,15 +1380,15 @@ async def luademel(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Lua de mel já acabou!")
         return
     
-    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"])
-    if datetime.now() - data_casamento > timedelta(days=7):
+    data_casamento = datetime.fromisoformat(casamento_atual["data_casamento"]).replace(tzinfo=BR_TZ)
+    if datetime.now(BR_TZ) - data_casamento > timedelta(days=7):
         casamento_atual["luademel"] = False
         bot.save_data()
         await interaction.response.send_message("❌ Lua de mel acabou!")
         return
     
     conjuge_id = casamento_atual["pessoa2"] if casamento_atual["pessoa1"] == user_id else casamento_atual["pessoa1"]
-    dias_restantes = 7 - (datetime.now() - data_casamento).days
+    dias_restantes = 7 - (datetime.now(BR_TZ) - data_casamento).days
     
     embed = discord.Embed(
         title="🌙 LUA DE MEL",
@@ -1459,7 +1470,7 @@ async def comprar_presente(interaction: discord.Interaction, presente: str, usua
     bot.user_inventory[target_id].append({
         "presente": presente,
         "de": interaction.user.name,
-        "data": datetime.now().isoformat()
+        "data": datetime.now(BR_TZ).isoformat()
     })
     
     bot.save_data()
@@ -1477,7 +1488,7 @@ async def meuspresentes(interaction: discord.Interaction):
     embed = discord.Embed(title=f"📦 Presentes de {interaction.user.display_name}", color=discord.Color.gold())
     
     for presente in bot.user_inventory[user_id][-10:]:
-        data = datetime.fromisoformat(presente["data"]).strftime("%d/%m/%Y")
+        data = datetime.fromisoformat(presente["data"]).replace(tzinfo=BR_TZ).strftime("%d/%m/%Y")
         embed.add_field(
             name=presente["presente"],
             value=f"De: {presente['de']} | {data}",
@@ -1491,7 +1502,7 @@ async def meuspresentes(interaction: discord.Interaction):
 @bot.tree.command(name="daily", description="💰 Recompensa diária")
 async def daily(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
-    hoje = datetime.now().date()
+    hoje = datetime.now(BR_TZ).date()
     
     if user_id in bot.daily_cooldowns:
         ultimo = datetime.fromisoformat(bot.daily_cooldowns[user_id]).date()
@@ -1504,7 +1515,7 @@ async def daily(interaction: discord.Interaction):
         bot.user_balances[user_id] = 0
     
     bot.user_balances[user_id] += valor
-    bot.daily_cooldowns[user_id] = datetime.now().isoformat()
+    bot.daily_cooldowns[user_id] = datetime.now(BR_TZ).isoformat()
     bot.save_data()
     
     await interaction.response.send_message(f"💰 Você ganhou {valor} moedas! Saldo: {bot.user_balances[user_id]}")
@@ -1701,8 +1712,8 @@ async def userinfo(interaction: discord.Interaction, membro: Optional[discord.Me
     embed = discord.Embed(title=f"Info: {membro.name}", color=membro.color)
     embed.set_thumbnail(url=membro.display_avatar.url)
     embed.add_field(name="ID", value=membro.id, inline=True)
-    embed.add_field(name="Conta criada", value=membro.created_at.strftime("%d/%m/%Y"), inline=True)
-    embed.add_field(name="Entrou em", value=membro.joined_at.strftime("%d/%m/%Y"), inline=True)
+    embed.add_field(name="Conta criada", value=membro.created_at.replace(tzinfo=BR_TZ).strftime("%d/%m/%Y"), inline=True)
+    embed.add_field(name="Entrou em", value=membro.joined_at.replace(tzinfo=BR_TZ).strftime("%d/%m/%Y"), inline=True)
     
     await interaction.response.send_message(embed=embed)
 
@@ -1719,7 +1730,7 @@ async def serverinfo(interaction: discord.Interaction):
     embed.add_field(name="Membros", value=guild.member_count, inline=True)
     embed.add_field(name="Canais", value=len(guild.channels), inline=True)
     embed.add_field(name="Cargos", value=len(guild.roles), inline=True)
-    embed.add_field(name="Criado em", value=guild.created_at.strftime("%d/%m/%Y"), inline=True)
+    embed.add_field(name="Criado em", value=guild.created_at.replace(tzinfo=BR_TZ).strftime("%d/%m/%Y"), inline=True)
     
     await interaction.response.send_message(embed=embed)
 
@@ -2134,7 +2145,7 @@ async def enquete(
         color=discord.Color.blue()
     )
     embed.set_footer(text=f"Enquete criada por {interaction.user.name}")
-    embed.timestamp = datetime.now()
+    embed.timestamp = datetime.now(BR_TZ)
     
     await interaction.response.send_message(embed=embed)
     message = await interaction.original_response()
@@ -2159,7 +2170,7 @@ async def ajuda(interaction: discord.Interaction):
               "`/chamada_lista` - Lista completa\n"
               "`/chamada_cancelar` - Cancelar\n"
               "`/chamada_listar_ativas` - Listar ativas\n"
-              "✨ **SEM horas: vence HOJE 23:59 (MEIA-NOITE)!**\n"
+              "✨ **SEM horas: vence HOJE 23:59 (MEIA-NOITE Brasília)!**\n"
               "✨ **COM horas: vence após X horas**",
         inline=False
     )
@@ -2272,6 +2283,8 @@ async def main():
         return
     
     print(f"🔵 Token encontrado! Conectando...")
+    print(f"⏰ Fuso horário configurado: Brasília (UTC-3)")
+    print(f"⏰ Horário atual: {datetime.now(BR_TZ).strftime('%d/%m/%Y %H:%M:%S')}")
     
     try:
         async with bot:
@@ -2292,10 +2305,11 @@ def run_bot():
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA CORRIGIDA")
+    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA COM FUSO BRASIL")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
-    print("✅ Sistema de Chamadas CORRIGIDO - Expira HOJE 23:59!")
+    print("✅ Sistema de Chamadas CORRIGIDO - Agora com FUSO BRASIL!")
+    print("✅ Expira HOJE 23:59 (Brasília) - NÃO confunde mais!")
     print("✅ Tasks persistentes - Mantém chamadas após reinicialização")
     print("✅ Timing INTELIGENTE funcionando perfeitamente")
     print("✅ Sistema de Ship (likes, ranking)")
