@@ -1,7 +1,7 @@
 import sys
 import discord
 from discord import app_commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Modal, TextInput
 import random
 import json
 import aiohttp
@@ -59,6 +59,406 @@ def keep_alive():
     server.start()
     print(f"✅ Servidor web configurado")
 
+# ==================== SISTEMA DE ENQUETE DINÂMICO ====================
+
+class EnqueteButton(Button):
+    def __init__(self, enquete_id: str, opcao_index: int, opcao_texto: str):
+        super().__init__(
+            style=discord.ButtonStyle.primary,
+            label=opcao_texto[:30],
+            emoji=self.get_emoji(opcao_index),
+            custom_id=f"enquete_{enquete_id}_{opcao_index}"
+        )
+        self.enquete_id = enquete_id
+        self.opcao_index = opcao_index
+        self.opcao_texto = opcao_texto
+    
+    def get_emoji(self, index):
+        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        if index < len(emojis):
+            return emojis[index]
+        return "✅"
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.enquete_id not in bot.enquetes:
+            await interaction.response.send_message("❌ Esta enquete não existe mais!", ephemeral=True)
+            return
+        
+        enquete = bot.enquetes[self.enquete_id]
+        user_id = str(interaction.user.id)
+        
+        # Remove voto anterior se existir
+        if user_id in enquete["votos_usuario"]:
+            voto_antigo = enquete["votos_usuario"][user_id]
+            enquete["votos"][voto_antigo] -= 1
+            enquete["votos_usuario"][user_id] = self.opcao_index
+            enquete["votos"][self.opcao_index] += 1
+            mensagem = f"✅ Seu voto foi alterado para **{self.opcao_texto}**!"
+        else:
+            enquete["votos"][self.opcao_index] += 1
+            enquete["votos_usuario"][user_id] = self.opcao_index
+            mensagem = f"✅ Seu voto foi registrado em **{self.opcao_texto}**!"
+        
+        # Atualiza o embed
+        await self.atualizar_embed(interaction, enquete)
+        
+        # Responde com confirmação
+        await interaction.response.send_message(mensagem, ephemeral=True)
+    
+    async def atualizar_embed(self, interaction: discord.Interaction, enquete):
+        total_votos = sum(enquete["votos"])
+        descricao = f"**{enquete['pergunta']}**\n\n"
+        
+        for i, opcao in enumerate(enquete["opcoes"]):
+            votos = enquete["votos"][i]
+            porcentagem = (votos / total_votos * 100) if total_votos > 0 else 0
+            barra = "█" * int(porcentagem // 5) + "░" * (20 - int(porcentagem // 5))
+            descricao += f"**{self.get_emoji(i)} {opcao}**\n"
+            descricao += f"`{barra}` **{votos} votos** ({porcentagem:.1f}%)\n\n"
+        
+        descricao += f"\n📊 **Total de votos:** {total_votos}"
+        descricao += f"\n👥 **Participantes:** {len(enquete['votos_usuario'])}"
+        
+        embed = discord.Embed(
+            title="📊 **ENQUETE**",
+            description=descricao,
+            color=discord.Color.blue()
+        )
+        
+        embed.set_footer(text=f"Criada por {enquete['criador_nome']} | ID: {self.enquete_id}")
+        embed.timestamp = datetime.now(BR_TZ)
+        
+        try:
+            canal = bot.get_channel(int(enquete["channel_id"]))
+            if canal:
+                msg = await canal.fetch_message(int(enquete["message_id"]))
+                if msg:
+                    await msg.edit(embed=embed)
+        except Exception as e:
+            print(f"Erro ao atualizar embed: {e}")
+
+class EnqueteView(View):
+    def __init__(self, enquete_id: str, opcoes: list):
+        super().__init__(timeout=None)
+        self.enquete_id = enquete_id
+        for i, opcao in enumerate(opcoes):
+            self.add_item(EnqueteButton(enquete_id, i, opcao))
+        self.add_item(EncerrarEnqueteButton(enquete_id))
+
+class EncerrarEnqueteButton(Button):
+    def __init__(self, enquete_id: str):
+        super().__init__(
+            style=discord.ButtonStyle.danger,
+            label="🔒 Encerrar Enquete",
+            custom_id=f"encerrar_enquete_{enquete_id}"
+        )
+        self.enquete_id = enquete_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.enquete_id not in bot.enquetes:
+            await interaction.response.send_message("❌ Enquete não encontrada!", ephemeral=True)
+            return
+        
+        enquete = bot.enquetes[self.enquete_id]
+        
+        # Verifica permissão
+        if str(interaction.user.id) != enquete["criador_id"] and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Apenas o criador ou administradores podem encerrar a enquete!", ephemeral=True)
+            return
+        
+        # Encerra a enquete
+        total_votos = sum(enquete["votos"])
+        resultados = []
+        
+        for i, opcao in enumerate(enquete["opcoes"]):
+            votos = enquete["votos"][i]
+            porcentagem = (votos / total_votos * 100) if total_votos > 0 else 0
+            resultados.append(f"**{opcao}** - {votos} votos ({porcentagem:.1f}%)")
+        
+        embed_final = discord.Embed(
+            title="📊 **ENQUETE ENCERRADA**",
+            description=f"**{enquete['pergunta']}**\n\n" + "\n".join(resultados),
+            color=discord.Color.dark_gray()
+        )
+        
+        embed_final.add_field(name="📊 Total de votos", value=str(total_votos), inline=True)
+        embed_final.add_field(name="👥 Participantes", value=str(len(enquete["votos_usuario"])), inline=True)
+        embed_final.set_footer(text=f"Encerrada por {interaction.user.name}")
+        embed_final.timestamp = datetime.now(BR_TZ)
+        
+        try:
+            canal = bot.get_channel(int(enquete["channel_id"]))
+            if canal:
+                msg = await canal.fetch_message(int(enquete["message_id"]))
+                if msg:
+                    await msg.edit(embed=embed_final, view=None)
+        except Exception as e:
+            print(f"Erro ao encerrar: {e}")
+        
+        # Remove da lista de enquetes ativas
+        del bot.enquetes[self.enquete_id]
+        bot.save_enquetes()
+        
+        await interaction.response.send_message("✅ Enquete encerrada com sucesso!", ephemeral=True)
+
+class CriarEnqueteModal(Modal):
+    def __init__(self):
+        super().__init__(title="📊 Criar Nova Enquete")
+        
+        self.pergunta = TextInput(
+            label="📝 Pergunta da Enquete",
+            placeholder="Ex: Qual é a melhor cor?",
+            required=True,
+            max_length=200
+        )
+        
+        self.opcoes = TextInput(
+            label="🎯 Opções (separadas por |)",
+            placeholder="Ex: Azul | Vermelho | Verde | Amarelo",
+            required=True,
+            max_length=500
+        )
+        
+        self.duracao = TextInput(
+            label="⏰ Duração em horas (0 = ilimitada)",
+            placeholder="Ex: 24 (deixe 0 para enquete permanente)",
+            required=False,
+            default="0",
+            max_length=3
+        )
+        
+        self.add_item(self.pergunta)
+        self.add_item(self.opcoes)
+        self.add_item(self.duracao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        pergunta = self.pergunta.value
+        opcoes_raw = self.opcoes.value
+        duracao = int(self.duracao.value) if self.duracao.value.isdigit() else 0
+        
+        # Processa as opções
+        opcoes = [op.strip() for op in opcoes_raw.split("|") if op.strip()]
+        
+        if len(opcoes) < 2:
+            await interaction.response.send_message("❌ Você precisa de pelo menos 2 opções!", ephemeral=True)
+            return
+        
+        if len(opcoes) > 20:
+            await interaction.response.send_message("❌ Máximo de 20 opções!", ephemeral=True)
+            return
+        
+        # Cria a enquete
+        enquete_id = f"{interaction.channel.id}-{int(datetime.now(BR_TZ).timestamp())}"
+        
+        expira_em = None
+        if duracao > 0:
+            expira_em = datetime.now(BR_TZ) + timedelta(hours=duracao)
+        
+        # Cria o embed
+        descricao = f"**{pergunta}**\n\n"
+        for i, opcao in enumerate(opcoes):
+            emoji = self.get_emoji(i)
+            descricao += f"{emoji} **{opcao}**\n"
+        
+        descricao += f"\n📊 **Total de votos:** 0"
+        descricao += f"\n👥 **Participantes:** 0"
+        
+        if expira_em:
+            descricao += f"\n⏰ **Expira:** {expira_em.strftime('%d/%m/%Y %H:%M')} (Brasília)"
+        else:
+            descricao += f"\n🌙 **Expira:** Nunca (enquete permanente)"
+        
+        embed = discord.Embed(
+            title="📊 **ENQUETE**",
+            description=descricao,
+            color=discord.Color.blue()
+        )
+        
+        embed.set_footer(text=f"Criada por {interaction.user.name} | ID: {enquete_id}")
+        embed.timestamp = datetime.now(BR_TZ)
+        
+        view = EnqueteView(enquete_id, opcoes)
+        
+        await interaction.response.send_message(embed=embed, view=view)
+        message = await interaction.original_response()
+        
+        # Salva os dados da enquete
+        bot.enquetes[enquete_id] = {
+            "pergunta": pergunta,
+            "opcoes": opcoes,
+            "votos": [0] * len(opcoes),
+            "votos_usuario": {},
+            "criador_id": str(interaction.user.id),
+            "criador_nome": interaction.user.name,
+            "channel_id": str(interaction.channel.id),
+            "message_id": str(message.id),
+            "criado_em": datetime.now(BR_TZ).isoformat(),
+            "expira_em": expira_em.isoformat() if expira_em else None
+        }
+        
+        bot.save_enquetes()
+        
+        # Agenda encerramento automático se tiver duração
+        if expira_em:
+            task = asyncio.create_task(bot.encerrar_enquete_automatico(enquete_id, expira_em))
+            bot.enquete_tasks[enquete_id] = task
+    
+    def get_emoji(self, index):
+        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        if index < len(emojis):
+            return emojis[index]
+        return "✅"
+
+class AdicionarOpcaoModal(Modal):
+    def __init__(self, enquete_id: str):
+        super().__init__(title="➕ Adicionar Nova Opção")
+        self.enquete_id = enquete_id
+        
+        self.nova_opcao = TextInput(
+            label="📝 Nova Opção",
+            placeholder="Digite a nova opção",
+            required=True,
+            max_length=100
+        )
+        
+        self.add_item(self.nova_opcao)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.enquete_id not in bot.enquetes:
+            await interaction.response.send_message("❌ Enquete não encontrada!", ephemeral=True)
+            return
+        
+        enquete = bot.enquetes[self.enquete_id]
+        
+        # Verifica permissão
+        if str(interaction.user.id) != enquete["criador_id"] and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Apenas o criador pode adicionar opções!", ephemeral=True)
+            return
+        
+        if len(enquete["opcoes"]) >= 20:
+            await interaction.response.send_message("❌ Máximo de 20 opções atingido!", ephemeral=True)
+            return
+        
+        nova_opcao = self.nova_opcao.value.strip()
+        novo_index = len(enquete["opcoes"])
+        
+        enquete["opcoes"].append(nova_opcao)
+        enquete["votos"].append(0)
+        
+        bot.save_enquetes()
+        
+        # Recria a view com o novo botão
+        await self.recriar_view(interaction, enquete)
+        
+        await interaction.response.send_message(f"✅ Opção **{nova_opcao}** adicionada!", ephemeral=True)
+    
+    async def recriar_view(self, interaction: discord.Interaction, enquete):
+        try:
+            canal = bot.get_channel(int(enquete["channel_id"]))
+            if canal:
+                msg = await canal.fetch_message(int(enquete["message_id"]))
+                if msg:
+                    nova_view = EnqueteView(self.enquete_id, enquete["opcoes"])
+                    
+                    # Atualiza o embed
+                    total_votos = sum(enquete["votos"])
+                    descricao = f"**{enquete['pergunta']}**\n\n"
+                    
+                    for i, opcao in enumerate(enquete["opcoes"]):
+                        votos = enquete["votos"][i]
+                        porcentagem = (votos / total_votos * 100) if total_votos > 0 else 0
+                        barra = "█" * int(porcentagem // 5) + "░" * (20 - int(porcentagem // 5))
+                        emoji = self.get_emoji(i)
+                        descricao += f"{emoji} **{opcao}**\n"
+                        descricao += f"`{barra}` **{votos} votos** ({porcentagem:.1f}%)\n\n"
+                    
+                    descricao += f"\n📊 **Total de votos:** {total_votos}"
+                    descricao += f"\n👥 **Participantes:** {len(enquete['votos_usuario'])}"
+                    
+                    if enquete.get("expira_em"):
+                        expira = datetime.fromisoformat(enquete["expira_em"]).replace(tzinfo=BR_TZ)
+                        if expira > datetime.now(BR_TZ):
+                            descricao += f"\n⏰ **Expira:** {expira.strftime('%d/%m/%Y %H:%M')} (Brasília)"
+                    
+                    embed = discord.Embed(
+                        title="📊 **ENQUETE**",
+                        description=descricao,
+                        color=discord.Color.blue()
+                    )
+                    
+                    embed.set_footer(text=f"Criada por {enquete['criador_nome']} | ID: {self.enquete_id}")
+                    embed.timestamp = datetime.now(BR_TZ)
+                    
+                    await msg.edit(embed=embed, view=nova_view)
+        except Exception as e:
+            print(f"Erro ao recriar view: {e}")
+    
+    def get_emoji(self, index):
+        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        if index < len(emojis):
+            return emojis[index]
+        return "✅"
+
+class GerenciarEnqueteView(View):
+    def __init__(self, enquete_id: str):
+        super().__init__(timeout=None)
+        self.enquete_id = enquete_id
+        
+        self.add_item(AdicionarOpcaoButton(enquete_id))
+        self.add_item(ResultadosButton(enquete_id))
+        self.add_item(EncerrarEnqueteButton(enquete_id))
+
+class AdicionarOpcaoButton(Button):
+    def __init__(self, enquete_id: str):
+        super().__init__(
+            style=discord.ButtonStyle.success,
+            label="➕ Adicionar Opção",
+            emoji="➕",
+            custom_id=f"add_opcao_{enquete_id}"
+        )
+        self.enquete_id = enquete_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        modal = AdicionarOpcaoModal(self.enquete_id)
+        await interaction.response.send_modal(modal)
+
+class ResultadosButton(Button):
+    def __init__(self, enquete_id: str):
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="📊 Ver Resultados",
+            emoji="📊",
+            custom_id=f"resultados_{enquete_id}"
+        )
+        self.enquete_id = enquete_id
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.enquete_id not in bot.enquetes:
+            await interaction.response.send_message("❌ Enquete não encontrada!", ephemeral=True)
+            return
+        
+        enquete = bot.enquetes[self.enquete_id]
+        total_votos = sum(enquete["votos"])
+        
+        resultados = []
+        for i, opcao in enumerate(enquete["opcoes"]):
+            votos = enquete["votos"][i]
+            porcentagem = (votos / total_votos * 100) if total_votos > 0 else 0
+            resultados.append(f"**{opcao}** - {votos} votos ({porcentagem:.1f}%)")
+        
+        embed = discord.Embed(
+            title="📊 Resultados da Enquete",
+            description=f"**{enquete['pergunta']}**\n\n" + "\n".join(resultados),
+            color=discord.Color.green()
+        )
+        
+        embed.add_field(name="Total de Votos", value=str(total_votos), inline=True)
+        embed.add_field(name="Participantes", value=str(len(enquete["votos_usuario"])), inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==================== CLASSE PRINCIPAL DO BOT ====================
+
 class Fort(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -80,6 +480,10 @@ class Fort(discord.Client):
         # Sistema de chamadas
         self.call_data = {}
         self.call_participants = {}
+        
+        # Sistema de enquetes
+        self.enquetes = {}
+        self.enquete_tasks = {}
         
         # Tasks ativas
         self.active_tasks = {}
@@ -138,6 +542,8 @@ class Fort(discord.Client):
                 self.call_data = dados
             elif tipo == 'call_participants':
                 self.call_participants = dados
+            elif tipo == 'enquetes':
+                self.enquetes = dados
         
         conn.close()
         self.import_from_json_if_empty()
@@ -146,7 +552,7 @@ class Fort(discord.Client):
         if not self.user_balances:
             try:
                 arquivos = ['economy.json', 'inventory.json', 'ships.json', 'marriages.json', 
-                           'anniversary.json', 'ship_history.json', 'calls.json']
+                           'anniversary.json', 'ship_history.json', 'calls.json', 'enquetes.json']
                 for arquivo in arquivos:
                     if os.path.exists(arquivo):
                         with open(arquivo, 'r', encoding='utf-8') as f:
@@ -166,6 +572,8 @@ class Fort(discord.Client):
                             elif arquivo == 'calls.json':
                                 self.call_data = data.get('calls', {})
                                 self.call_participants = data.get('participants', {})
+                            elif arquivo == 'enquetes.json':
+                                self.enquetes = data
                 print("✅ Dados importados dos JSONs!")
                 self.save_data()
             except Exception as e:
@@ -192,13 +600,23 @@ class Fort(discord.Client):
             ('anniversary', self.anniversary_data),
             ('ship_history', self.ship_history),
             ('calls', self.call_data),
-            ('call_participants', self.call_participants)
+            ('call_participants', self.call_participants),
+            ('enquetes', self.enquetes)
         ]
         
         for tipo, dados in dados_para_salvar:
             c.execute('INSERT OR REPLACE INTO dados_json VALUES (?, ?)', 
                      (tipo, json.dumps(dados, ensure_ascii=False)))
         
+        conn.commit()
+        conn.close()
+    
+    def save_enquetes(self):
+        """Salva apenas as enquetes no banco de dados"""
+        conn = sqlite3.connect('fort_bot.db')
+        c = conn.cursor()
+        c.execute('INSERT OR REPLACE INTO dados_json VALUES (?, ?)', 
+                 ('enquetes', json.dumps(self.enquetes, ensure_ascii=False)))
         conn.commit()
         conn.close()
 
@@ -208,6 +626,93 @@ class Fort(discord.Client):
         
         # Recriar tasks para chamadas ativas ao reiniciar
         await self.restaurar_chamadas_ativas()
+        
+        # Restaurar enquetes ativas
+        await self.restaurar_enquetes_ativas()
+
+    async def restaurar_enquetes_ativas(self):
+        """Restaura as enquetes ativas quando o bot reinicia"""
+        agora = datetime.now(BR_TZ)
+        enquetes_remover = []
+        
+        for enquete_id, enquete_data in self.enquetes.items():
+            try:
+                expira_em = enquete_data.get("expira_em")
+                if expira_em:
+                    expira = datetime.fromisoformat(expira_em).replace(tzinfo=BR_TZ)
+                    
+                    if expira <= agora:
+                        print(f"⏰ Enquete {enquete_id} já expirou, removendo...")
+                        enquetes_remover.append(enquete_id)
+                    else:
+                        print(f"🔄 Recriando task para enquete {enquete_id} - Expira em {expira.strftime('%d/%m/%Y %H:%M:%S')}")
+                        task = asyncio.create_task(self.encerrar_enquete_automatico(enquete_id, expira))
+                        self.enquete_tasks[enquete_id] = task
+            except Exception as e:
+                print(f"❌ Erro ao restaurar enquete {enquete_id}: {e}")
+                enquetes_remover.append(enquete_id)
+        
+        # Remover enquetes expiradas
+        for enquete_id in enquetes_remover:
+            if enquete_id in self.enquetes:
+                del self.enquetes[enquete_id]
+        
+        if enquetes_remover:
+            self.save_enquetes()
+            print(f"✅ {len(enquetes_remover)} enquetes expiradas removidas")
+
+    async def encerrar_enquete_automatico(self, enquete_id: str, expira_em: datetime):
+        """Encerra a enquete automaticamente após o tempo limite"""
+        try:
+            agora = datetime.now(BR_TZ)
+            tempo_restante = (expira_em - agora).total_seconds()
+            
+            if tempo_restante > 0:
+                await asyncio.sleep(tempo_restante)
+            
+            if enquete_id not in self.enquetes:
+                return
+            
+            enquete = self.enquetes[enquete_id]
+            total_votos = sum(enquete["votos"])
+            resultados = []
+            
+            for i, opcao in enumerate(enquete["opcoes"]):
+                votos = enquete["votos"][i]
+                porcentagem = (votos / total_votos * 100) if total_votos > 0 else 0
+                resultados.append(f"**{opcao}** - {votos} votos ({porcentagem:.1f}%)")
+            
+            embed_final = discord.Embed(
+                title="📊 **ENQUETE ENCERRADA**",
+                description=f"**{enquete['pergunta']}**\n\n" + "\n".join(resultados),
+                color=discord.Color.dark_gray()
+            )
+            
+            embed_final.add_field(name="📊 Total de votos", value=str(total_votos), inline=True)
+            embed_final.add_field(name="👥 Participantes", value=str(len(enquete["votos_usuario"])), inline=True)
+            embed_final.set_footer(text=f"Encerrada automaticamente por tempo limite")
+            embed_final.timestamp = datetime.now(BR_TZ)
+            
+            try:
+                canal = self.get_channel(int(enquete["channel_id"]))
+                if canal:
+                    msg = await canal.fetch_message(int(enquete["message_id"]))
+                    if msg:
+                        await msg.edit(embed=embed_final, view=None)
+            except Exception as e:
+                print(f"Erro ao encerrar enquete: {e}")
+            
+            del self.enquetes[enquete_id]
+            if enquete_id in self.enquete_tasks:
+                del self.enquete_tasks[enquete_id]
+            
+            self.save_enquetes()
+            print(f"✅ Enquete {enquete_id} encerrada automaticamente!")
+            
+        except asyncio.CancelledError:
+            print(f"⏹️ Task da enquete {enquete_id} foi cancelada")
+        except Exception as e:
+            print(f"❌ Erro ao encerrar enquete: {e}")
 
     async def restaurar_chamadas_ativas(self):
         """Restaura as tasks de chamadas ativas quando o bot reinicia"""
@@ -247,15 +752,17 @@ class Fort(discord.Client):
         print(f"📊 Servidores: {len(self.guilds)}")
         print(f"👥 Usuários: {len(self.users)}")
         print(f"📢 Chamadas ativas: {len(self.call_data)}")
+        print(f"📊 Enquetes ativas: {len(self.enquetes)}")
         print(f"💖 Sistema de Ship: ATIVO")
         print(f"💒 Sistema de Casamento: ATIVO")
         print(f"💰 Sistema de Economia: ATIVO")
         print(f"🎮 Sistema de Jogos: ATIVO")
         print(f"🎭 Comandos com GIF: ATIVO")
+        print(f"📊 Sistema de Enquetes Dinâmicas: ATIVO")
         print(f"💾 Banco de Dados: SQLite")
         print(f"⏰ Fuso Horário: Brasília (UTC-3)")
         print(f"⏰ Horário atual: {datetime.now(BR_TZ).strftime('%d/%m/%Y %H:%M:%S')}")
-        await self.change_presence(activity=discord.Game(name="📢 Use /ajuda | 70+ comandos!"))
+        await self.change_presence(activity=discord.Game(name="📢 Use /enquete | 70+ comandos!"))
 
 bot = Fort()
 
@@ -876,6 +1383,131 @@ async def chamada_listar_ativas(interaction: discord.Interaction):
         )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==================== COMANDOS DE ENQUETE ====================
+
+@bot.tree.command(name="enquete", description="📊 Criar uma enquete dinâmica")
+async def enquete_criar(interaction: discord.Interaction):
+    """Abre um modal para criar uma enquete"""
+    modal = CriarEnqueteModal()
+    await interaction.response.send_modal(modal)
+
+@bot.tree.command(name="enquete_info", description="ℹ️ Ver informações de uma enquete")
+async def enquete_info(interaction: discord.Interaction, message_id: str):
+    """Ver informações detalhadas de uma enquete"""
+    enquete_id = None
+    for eid, data in bot.enquetes.items():
+        if data.get('message_id') == message_id:
+            enquete_id = eid
+            break
+    
+    if not enquete_id:
+        await interaction.response.send_message("❌ Enquete não encontrada!", ephemeral=True)
+        return
+    
+    data = bot.enquetes[enquete_id]
+    total_votos = sum(data["votos"])
+    
+    embed = discord.Embed(
+        title="📊 Informações da Enquete",
+        description=f"**{data['pergunta']}**",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="📝 Opções", value=str(len(data["opcoes"])), inline=True)
+    embed.add_field(name="✅ Total de Votos", value=str(total_votos), inline=True)
+    embed.add_field(name="👥 Participantes", value=str(len(data["votos_usuario"])), inline=True)
+    embed.add_field(name="👤 Criador", value=f"<@{data['criador_id']}>", inline=True)
+    
+    if data.get("expira_em"):
+        expira = datetime.fromisoformat(data["expira_em"]).replace(tzinfo=BR_TZ)
+        if expira > datetime.now(BR_TZ):
+            embed.add_field(name="⏰ Expira em", value=expira.strftime("%d/%m/%Y %H:%M"), inline=True)
+        else:
+            embed.add_field(name="⏰ Status", value="🔴 Encerrada", inline=True)
+    else:
+        embed.add_field(name="⏰ Status", value="🟢 Permanente", inline=True)
+    
+    embed.set_footer(text=f"ID: {enquete_id}")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="enquete_listar", description="📋 Listar todas as enquetes ativas")
+async def enquete_listar(interaction: discord.Interaction):
+    """Lista todas as enquetes ativas no canal"""
+    agora = datetime.now(BR_TZ)
+    ativas = []
+    
+    for eid, data in bot.enquetes.items():
+        if data.get('channel_id') == str(interaction.channel.id):
+            expira = data.get("expira_em")
+            if expira:
+                expira_dt = datetime.fromisoformat(expira).replace(tzinfo=BR_TZ)
+                if expira_dt > agora:
+                    ativas.append((eid, data, expira_dt))
+            else:
+                ativas.append((eid, data, None))
+    
+    if not ativas:
+        await interaction.response.send_message("📋 Nenhuma enquete ativa neste canal!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Enquetes Ativas",
+        description=f"Total: {len(ativas)} enquete(s)",
+        color=discord.Color.green()
+    )
+    
+    for eid, data, expira in ativas[:10]:
+        total_votos = sum(data["votos"])
+        status = "🟢 Ativa"
+        if expira:
+            tempo_restante = expira - agora
+            horas = int(tempo_restante.total_seconds() // 3600)
+            minutos = int((tempo_restante.total_seconds() % 3600) // 60)
+            status = f"⏰ Expira em {horas}h {minutos}m"
+        
+        embed.add_field(
+            name=f"📊 {data['pergunta'][:40]}",
+            value=f"📝 {len(data['opcoes'])} opções\n✅ {total_votos} votos\n{status}\n📝 `{data['message_id']}`",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="enquete_gerenciar", description="⚙️ Gerenciar uma enquete")
+async def enquete_gerenciar(interaction: discord.Interaction, message_id: str):
+    """Abre o painel de gerenciamento da enquete"""
+    enquete_id = None
+    for eid, data in bot.enquetes.items():
+        if data.get('message_id') == message_id:
+            enquete_id = eid
+            break
+    
+    if not enquete_id:
+        await interaction.response.send_message("❌ Enquete não encontrada!", ephemeral=True)
+        return
+    
+    data = bot.enquetes[enquete_id]
+    
+    # Verifica permissão
+    if str(interaction.user.id) != data["criador_id"] and not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Apenas o criador ou administradores podem gerenciar a enquete!", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="⚙️ Painel de Gerenciamento",
+        description=f"**{data['pergunta']}**",
+        color=discord.Color.purple()
+    )
+    
+    embed.add_field(name="📝 Opções", value=str(len(data["opcoes"])), inline=True)
+    embed.add_field(name="✅ Votos", value=str(sum(data["votos"])), inline=True)
+    embed.add_field(name="👥 Participantes", value=str(len(data["votos_usuario"])), inline=True)
+    
+    view = GerenciarEnqueteView(enquete_id)
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ==================== SISTEMA DE SHIP COMPLETO ====================
 
@@ -2111,48 +2743,6 @@ async def sortear(interaction: discord.Interaction, cargo: Optional[discord.Role
         sorteado = random.choice(membros)
         await interaction.response.send_message(f"🎁 O sorteado do servidor é: {sorteado.mention}! 🎉")
 
-@bot.tree.command(name="enquete", description="📊 Criar uma enquete rápida")
-@app_commands.describe(
-    pergunta="A pergunta da enquete",
-    opcao1="Primeira opção",
-    opcao2="Segunda opção",
-    opcao3="Terceira opção (opcional)",
-    opcao4="Quarta opção (opcional)"
-)
-async def enquete(
-    interaction: discord.Interaction,
-    pergunta: str,
-    opcao1: str,
-    opcao2: str,
-    opcao3: str = None,
-    opcao4: str = None
-):
-    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
-    opcoes = [opcao1, opcao2]
-    
-    if opcao3:
-        opcoes.append(opcao3)
-    if opcao4:
-        opcoes.append(opcao4)
-    
-    descricao = ""
-    for i, opcao in enumerate(opcoes):
-        descricao += f"{emojis[i]} {opcao}\n"
-    
-    embed = discord.Embed(
-        title=f"📊 {pergunta}",
-        description=descricao,
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"Enquete criada por {interaction.user.name}")
-    embed.timestamp = datetime.now(BR_TZ)
-    
-    await interaction.response.send_message(embed=embed)
-    message = await interaction.original_response()
-    
-    for i in range(len(opcoes)):
-        await message.add_reaction(emojis[i])
-
 # ==================== COMANDO DE AJUDA ATUALIZADO ====================
 
 @bot.tree.command(name="ajuda", description="📚 Todos os comandos")
@@ -2172,6 +2762,18 @@ async def ajuda(interaction: discord.Interaction):
               "`/chamada_listar_ativas` - Listar ativas\n"
               "✨ **SEM horas: vence HOJE 23:59 (MEIA-NOITE Brasília)!**\n"
               "✨ **COM horas: vence após X horas**",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📊 **ENQUETES**",
+        value="`/enquete` - Criar enquete dinâmica\n"
+              "`/enquete_info` - Ver informações\n"
+              "`/enquete_listar` - Listar enquetes\n"
+              "`/enquete_gerenciar` - Gerenciar enquete\n"
+              "✨ **Botões interativos!**\n"
+              "✨ **Votos em tempo real!**\n"
+              "✨ **Até 20 opções!**",
         inline=False
     )
     
@@ -2241,8 +2843,7 @@ async def ajuda(interaction: discord.Interaction):
         value="`/moeda` - Cara ou coroa\n"
               "`/rps` - Pedra papel tesoura\n"
               "`/dado_rpg` - Dados de RPG\n"
-              "`/sortear` - Sortear membro\n"
-              "`/enquete` - Criar enquete\n",
+              "`/sortear` - Sortear membro\n",
         inline=True
     )
     
@@ -2267,7 +2868,7 @@ async def ajuda(interaction: discord.Interaction):
         inline=True
     )
     
-    embed.set_footer(text="Total: 70+ comandos! Use / antes de cada comando")
+    embed.set_footer(text="Total: 75+ comandos! Use / antes de cada comando")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     await interaction.response.send_message(embed=embed)
@@ -2305,19 +2906,20 @@ def run_bot():
 
 if __name__ == "__main__":
     print("="*60)
-    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA COM FUSO BRASIL")
+    print("🚀 INICIANDO BOT FORT - VERSÃO COMPLETA COM SISTEMA DE ENQUETES!")
     print("="*60)
     print("\n📢 SISTEMAS CARREGADOS:")
     print("✅ Sistema de Chamadas CORRIGIDO - Agora com FUSO BRASIL!")
+    print("✅ Sistema de Enquetes DINÂMICO - Botões interativos!")
     print("✅ Expira HOJE 23:59 (Brasília) - NÃO confunde mais!")
     print("✅ Tasks persistentes - Mantém chamadas após reinicialização")
-    print("✅ Timing INTELIGENTE funcionando perfeitamente")
+    print("✅ Enquetes com até 20 opções e votos em tempo real!")
     print("✅ Sistema de Ship (likes, ranking)")
     print("✅ Sistema de Casamento (com economia)")
     print("✅ Sistema de Presentes e Signos")
     print("✅ Sistema de Economia (daily, slots)")
     print("✅ Comandos com GIF (abraço, beijo, etc)")
-    print("✅ 70+ COMANDOS NO TOTAL!")
+    print("✅ 75+ COMANDOS NO TOTAL!")
     print("="*60)
     
     run_bot()
