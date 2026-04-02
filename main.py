@@ -2133,73 +2133,77 @@ async def pascoa_info(interaction: discord.Interaction):
 # GIFs de RP
 GIFS_RP = {
     "abraco": [
-        "https://tenor.com/pt-BR/view/hugging-gif-6353720017538202613",
-        "https://tenor.com/pt-BR/view/hug-gif-26359154",
-        "https://tenor.com/pt-BR/view/cuddle-anime-hug-love-hug-happy-hug-loving-embrace-gif-24485164"
+        "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaHdua3U1dW95MzU2amtwcTMwenB1cm5tMGRjcnBoNW5xcXJ1cXByZyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/1JmGiBtqTuehfYxuy9/giphy.gif",
+        "https://media1.tenor.com/m/SYsRdiK-T7gAAAAd/hug-anime.gif",
+        "https://media1.tenor.com/m/BFmsQg9J1ZMAAAAd/chikako-hugging-otohime-for-the-first-and-she-confused.gif",
+        "https://media1.tenor.com/m/CBJKhz9QvnMAAAAd/cute-anime-cute.gif",
+        "https://media1.tenor.com/m/_Ip7XSmd8M8AAAAd/clannad-after-story-anime.gif"
+
     ],
     "beijo": [
-        "https://tenor.com/pt-BR/view/hyakkano-100-girlfriends-anime-kiss-kiss-anime-anime-kiss-cheek-gif-404363882587350736",
-        "https://tenor.com/pt-BR/view/sealyx-frieren-beyond-journey's-end-gif-14136988244098183569",
-        "https://tenor.com/pt-BR/view/sakura-trick-kiss-yuri-gif-22001906"
-    ],
+        "https://media1.tenor.com/m/kmxEaVuW8AoAAAAd/kiss-gentle-kiss.gif",
+        "https://media1.tenor.com/m/gNhRibwJ0JMAAAAd/gay-anime.gif",
+        "https://media1.tenor.com/m/IxSPEt5BOQIAAAAd/kiss-gay.gif",
+        "https://media1.tenor.com/m/89DvSXKzlVwAAAAd/anime-kiss-kiss.gif"
+        ],
     "choro": [
-        "https://tenor.com/pt-BR/view/marin-crying-marin-kitagawa-my-dress-up-darling-my-dress-up-darling-season-2-mdud-s2-gif-10374253551883832074",
-        "https://tenor.com/pt-BR/view/frieren-cry-frieren-beyond-journey's-end-sousou-no-frieren-anime-elf-gif-439863309920468642",
-        "https://tenor.com/pt-BR/view/tohru-honda-tohru-honda-fruits-basket-fruits-gif-1020039318310337767"
+        "https://media1.tenor.com/m/j_jAo-neywoAAAAd/marin-crying-marin-kitagawa.gif",
+        "https://media1.tenor.com/m/Bhq1WZGJfqIAAAAd/frieren-cry-frieren-beyond-journey%27s-end.gif",
+        "https://media1.tenor.com/m/DifoWwjRvOcAAAAd/tohru-honda-tohru.gif"
     ],
     "riso": [
-        "https://tenor.com/pt-BR/view/laughing-lol-slam-table-anime-cute-gif-17848238",
-        "https://tenor.com/pt-BR/view/rezero-rem-laugh-laughing-anime-gif-25098531",
-        "https://tenor.com/pt-BR/view/morfonication-anime-laugh-tsukushi-futaba-gif-26336492"
+        "https://media1.tenor.com/m/K6WDm9L78mgAAAAd/rezero-rem.gif",
+        "https://media1.tenor.com/m/BP9vMzwRSZwAAAAd/laughing-lol.gif",
+        "https://media1.tenor.com/m/uxOWCWOIypAAAAAd/morfonication-anime-laugh.gif"
     ],
     "sono": [
-        "https://tenor.com/pt-BR/view/yuru-camp-kagamihara-nadeshiko-sleep-nadeshiko-gif-27053496",
-        "https://tenor.com/pt-BR/view/anime-fran-sleep-sleepy-tired-gif-8633431630979404250"
+        "https://media1.tenor.com/m/d9AcU5UmEdoAAAAd/anime-fran.gif",
+        "https://media1.tenor.com/m/dUkiteCccQQAAAAd/yuru-camp-kagamihara-nadeshiko.gif"
     ],
     "briga": [
-        "https://tenor.com/pt-BR/view/jujutsu-kaisen-season-3-naoya-zenin-naoya-choso-gif-8018191854547431062",
-        "https://tenor.com/pt-BR/view/foot-waving-ghost-ghost-hug-thank-you-images-bnb-gif-13106348231337897144"
+        "https://media1.tenor.com/m/b0ZXAm867pYAAAAd/jujutsu-kaisen-season-3.gif",
+        "https://media1.tenor.com/m/teMaRqd27LgAAAAd/foot-waving-ghost.gif"
     ],
     "dance": [
-        "https://tenor.com/pt-BR/view/anime-girl-dancing-hakari-dance-lonely-gif-13337816897041770339",
-        "https://tenor.com/pt-BR/view/sakura-trick-dancing-anime-girl-cute-funny-gif-17731942858238751687"
+        "https://media.tenor.com/uRlxzRNgp2MAAAAj/anime-girl.gif",
+        "https://media1.tenor.com/m/9hSEFOrYc8cAAAAd/sakura-trick-dancing.gif"
     ],
     "pensando": [
-        "https://tenor.com/pt-BR/view/anime-thinking-anime-boy-gif-9184513563331580030",
-        "https://tenor.com/pt-BR/view/maomao-apothecary-diaries-anime-anime-girl-reaction-gif-9251444815491222582"
+        "https://media1.tenor.com/m/f3XybJki0H4AAAAd/anime-thinking.gif",
+        "https://media1.tenor.com/m/gGO8Cx57zDYAAAAd/maomao-apothecary-diaries.gif"
     ],
     "susto": [
-        "https://tenor.com/pt-BR/view/anime-scare-scared-afraid-disgust-gif-11261379283354692680",
-        "https://tenor.com/pt-BR/view/umaru-chan-scared-peur-awkward-girl-gif-12136289"
+        "https://media1.tenor.com/m/nEh0yvlMrEgAAAAd/anime-scare.gif",
+        "https://media1.tenor.com/m/RhyxCbENd6YAAAAd/umaru-chan-scared.gif"
     ],
     "olhando": [
-        "https://tenor.com/pt-BR/view/what-aki-adagaki-aki-adagaki-masamune-gif-23979353",
-        "https://tenor.com/pt-BR/view/smug-gif-678896104876953280"
+        "https://media1.tenor.com/m/rVdLW8Oi97kAAAAd/what-aki-adagaki.gif",
+        "https://media1.tenor.com/m/CWvsaRKWTsAAAAAd/smug.gif"
     ],
     "envergonhado": [
-        "https://tenor.com/pt-BR/view/anime-boy-bed-gif-25406906",
-        "https://tenor.com/pt-BR/view/flustered-flushed-embarrassed-anime-girl-gif-25259055"
+        "https://media1.tenor.com/m/GbgGJT3nsVUAAAAd/flustered-flushed.gif",
+        "https://media1.tenor.com/m/4rcKprvD5hEAAAAd/anime-boy.gif"
     ],
     "mimos": [
-        "https://tenor.com/pt-BR/view/anime-hug-anime-hug-hugs-cuddle-gif-3554111819575174974",
-        "https://tenor.com/pt-BR/view/anime-gif-16486418970011404387"
+        "https://media1.tenor.com/m/MVK93pHLpz4AAAAd/anime-hug-anime.gif",
+        "https://media1.tenor.com/m/5MuGtFXKiGMAAAAd/anime.gif"
     ],
     "raiva": [
-        "https://tenor.com/pt-BR/view/anime-angry-mad-gif-26223355",
-        "https://tenor.com/pt-BR/view/anime-angry-gif-22001303",
-        "https://tenor.com/pt-BR/view/brat-annoying-rotznase-snotty-nosed-brat-anime-gif-16034540803443332575"
+        "https://media1.tenor.com/m/hkoyf1VeaZ4AAAAd/anime-angry.gif",
+        "https://media1.tenor.com/m/MvKZZ7JCkUMAAAAd/anime-angry.gif",
+        "https://media1.tenor.com/m/3oYh5_W_Fd8AAAAd/brat-annoying.gif"
     ],
     "curiosidade": [
-        "https://tenor.com/pt-BR/view/tonikawa-anime-gif-21936047",
-        "https://tenor.com/pt-BR/view/nejire-curious-gif-18453646"
+        "https://media1.tenor.com/m/qCuO6yW3qS0AAAAd/tonikawa-anime.gif",
+        "https://media1.tenor.com/m/O_HYVj2aFyIAAAAd/nejire-curious.gif"
     ],
     "tristeza": [
-        "https://tenor.com/pt-BR/view/sad-anime-guy-lonely-anime-guy-winds-blow-by-anime-guy-sad-gif-13424156687993837135",
-        "https://tenor.com/pt-BR/view/anime-my-dress-up-darling-marin-kitagawa-unclephuc-blue-gif-17358835765101706400"
+        "https://media1.tenor.com/m/ukwvYi0Olk8AAAAd/sad-anime-guy-lonely-anime-guy.gif",
+        "https://media1.tenor.com/m/8Ob5KEU7vKAAAAAd/anime-my-dress-up-darling.gif"
     ],
     "comemoracao": [
-        "https://tenor.com/pt-BR/view/celebrando-celebración-bailando-chopper-usopp-gif-18205253853081690985",
-        "https://tenor.com/pt-BR/view/oshi-no-ko-anime-idol-cheer-light-stick-gif-7022770117418543112"
+        "https://media1.tenor.com/m/_KYN7H6-42kAAAAd/celebrando-celebraci%C3%B3n.gif",
+        "https://media1.tenor.com/m/YXXkNqv16AgAAAAd/oshi-no-ko-anime.gif"
     ]
 }
 
@@ -3371,42 +3375,7 @@ async def baitola(interaction: discord.Interaction, membro: discord.Member):
 
 # ==================== COMANDOS COM GIFS ====================
 
-gifs_abraco = [
-    "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaHdua3U1dW95MzU2amtwcTMwenB1cm5tMGRjcnBoNW5xcXJ1cXByZyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/1JmGiBtqTuehfYxuy9/giphy.gif",
-    "https://media1.tenor.com/m/SYsRdiK-T7gAAAAd/hug-anime.gif",
-    "https://media1.tenor.com/m/BFmsQg9J1ZMAAAAd/chikako-hugging-otohime-for-the-first-and-she-confused.gif",
-    "https://media1.tenor.com/m/CBJKhz9QvnMAAAAd/cute-anime-cute.gif",
-    "https://media1.tenor.com/m/_Ip7XSmd8M8AAAAd/clannad-after-story-anime.gif"
-]
 
-gifs_beijo = [
-    "https://media1.tenor.com/m/kmxEaVuW8AoAAAAd/kiss-gentle-kiss.gif",
-    "https://media1.tenor.com/m/gNhRibwJ0JMAAAAd/gay-anime.gif",
-    "https://media1.tenor.com/m/IxSPEt5BOQIAAAAd/kiss-gay.gif",
-    "https://media1.tenor.com/m/89DvSXKzlVwAAAAd/anime-kiss-kiss.gif"
-]
-
-gifs_carinho = [
-    "https://media1.tenor.com/m/hR_7bvEw3l0AAAAd/clannad-anime.gif",
-    "https://media1.tenor.com/m/rtHwrLRPlAkAAAAd/class-no-daikirai-na-joshi-to-kekkon-suru-koto-ni-natta-i%27m-getting-married-to-a-girl-i-hate-in-my-class.gif",
-    "https://media1.tenor.com/m/3bu6QBVHkooAAAAd/anime-lap-pillow-lap.gif"
-]
-
-gifs_tapa = [
-    "https://media1.tenor.com/m/MXZGFeabIIwAAAAd/taiga-toradora.gif",
-    "https://media1.tenor.com/m/WYmal-WAnksAAAAd/yuzuki-mizusaka-nonoka-komiya.gif",
-    "https://media1.tenor.com/m/VHGbBswo_rQAAAAd/k-on-ritsu.gif"
-]
-
-gifs_festa = [
-    "https://media1.tenor.com/m/uEIa6CNVUZAAAAAd/machu-nyaan.gif",
-    "https://media1.tenor.com/m/GebsStTPoUEAAAAd/party-time.gif"
-]
-
-gifs_matar = [
-    "https://media1.tenor.com/m/SIrXZQWK9WAAAAAd/me-friends.gif",
-    "https://media1.tenor.com/m/jrnH6CdNne0AAAAd/2s.gif"
-]
 
 @bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
 async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
