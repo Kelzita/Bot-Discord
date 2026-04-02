@@ -3373,39 +3373,39 @@ async def baitola(interaction: discord.Interaction, membro: discord.Member):
 
 gifs_abraco = [
     "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExaHdua3U1dW95MzU2amtwcTMwenB1cm5tMGRjcnBoNW5xcXJ1cXByZyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/1JmGiBtqTuehfYxuy9/giphy.gif",
-    "https://tenor.com/pt-BR/view/hug-anime-comfy-cute-gif-5299348585618231224",
-    "https://tenor.com/pt-BR/view/chikako-hugging-otohime-for-the-first-and-she-confused-gif-313471048803276179",
-    "https://tenor.com/pt-BR/view/cute-anime-cute-bestie-hug-tight-hug-is-it-wrong-to-pick-up-girls-in-a-dungeon-gif-581609246627511923",
-    "https://tenor.com/pt-BR/view/clannad-after-story-anime-hug-sad-gif-12668691"
+    "https://media1.tenor.com/m/SYsRdiK-T7gAAAAd/hug-anime.gif",
+    "https://media1.tenor.com/m/BFmsQg9J1ZMAAAAd/chikako-hugging-otohime-for-the-first-and-she-confused.gif",
+    "https://media1.tenor.com/m/CBJKhz9QvnMAAAAd/cute-anime-cute.gif",
+    "https://media1.tenor.com/m/_Ip7XSmd8M8AAAAd/clannad-after-story-anime.gif"
 ]
 
 gifs_beijo = [
-    "https://tenor.com/pt-BR/view/kiss-gentle-kiss-anime-kiss-gentle-anime-kiss-gif-10550883246321102858",
-    "https://tenor.com/pt-BR/view/gay-anime-gif-20086847",
-    "https://tenor.com/pt-BR/view/kiss-gay-couple-gif-12946404",
-    "https://tenor.com/pt-BR/view/anime-kiss-kiss-gay-kiss-gif-17568805245108327772"
+    "https://media1.tenor.com/m/kmxEaVuW8AoAAAAd/kiss-gentle-kiss.gif",
+    "https://media1.tenor.com/m/gNhRibwJ0JMAAAAd/gay-anime.gif",
+    "https://media1.tenor.com/m/IxSPEt5BOQIAAAAd/kiss-gay.gif",
+    "https://media1.tenor.com/m/89DvSXKzlVwAAAAd/anime-kiss-kiss.gif"
 ]
 
 gifs_carinho = [
-    "https://tenor.com/pt-BR/view/clannad-anime-anime-girl-head-pat-good-girl-gif-9592662185233931869",
-    "https://tenor.com/pt-BR/view/class-no-daikirai-na-joshi-to-kekkon-suru-koto-ni-natta-i'm-getting-married-to-a-girl-i-hate-in-my-class-saito-houjou-shisei-houjou-comfort-gif-12597114257282143241",
-    "https://tenor.com/pt-BR/view/anime-lap-pillow-lap-pillow-anime-gif-15977568887424651914"
+    "https://media1.tenor.com/m/hR_7bvEw3l0AAAAd/clannad-anime.gif",
+    "https://media1.tenor.com/m/rtHwrLRPlAkAAAAd/class-no-daikirai-na-joshi-to-kekkon-suru-koto-ni-natta-i%27m-getting-married-to-a-girl-i-hate-in-my-class.gif",
+    "https://media1.tenor.com/m/3bu6QBVHkooAAAAd/anime-lap-pillow-lap.gif"
 ]
 
 gifs_tapa = [
-    "https://tenor.com/pt-BR/view/taiga-toradora-fast-slap-slap-baka-gif-27475021",
-    "https://tenor.com/pt-BR/view/yuzuki-mizusaka-nonoka-komiya-celestial-method-sora-no-method-anime-slap-gif-26485601",
-    "https://tenor.com/pt-BR/view/k-on-ritsu-hit-bonk-funny-gif-6084815025051598516"
+    "https://media1.tenor.com/m/MXZGFeabIIwAAAAd/taiga-toradora.gif",
+    "https://media1.tenor.com/m/WYmal-WAnksAAAAd/yuzuki-mizusaka-nonoka-komiya.gif",
+    "https://media1.tenor.com/m/VHGbBswo_rQAAAAd/k-on-ritsu.gif"
 ]
 
 gifs_festa = [
-    "https://tenor.com/pt-BR/view/machu-nyaan-gquuuuuux-mobile-suit-gundam-gquuuuuux-kidou-senshi-gundam-gif-13277204235769172368",
-    "https://tenor.com/pt-BR/view/party-time-gif-23738620"
+    "https://media1.tenor.com/m/uEIa6CNVUZAAAAAd/machu-nyaan.gif",
+    "https://media1.tenor.com/m/GebsStTPoUEAAAAd/party-time.gif"
 ]
 
 gifs_matar = [
-    "https://tenor.com/pt-BR/view/me-friends-smash-anime-crash-gif-16153256",
-    "https://tenor.com/pt-BR/view/2s-gif-23585902"
+    "https://media1.tenor.com/m/SIrXZQWK9WAAAAAd/me-friends.gif",
+    "https://media1.tenor.com/m/jrnH6CdNne0AAAAd/2s.gif"
 ]
 
 @bot.tree.command(name="abraco_gif", description="🤗 Abraçar alguém com GIF")
