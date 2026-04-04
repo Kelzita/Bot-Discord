@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Fort Bot — main.py corrigido (GIFs, enquete/modal, minigames Páscoa, RP extra).
-Requer: discord.py 2.x, flask, aiohttp
+Requer: discord.py 2.x, flask
 """
 import sys
 import discord
@@ -364,6 +364,8 @@ class Fort(discord.Client):
         self.pascoa_memoria = {}
         self.pascoa_quiz_cd = {}
         self.pascoa_corrida = {}
+        self.pascoa_cacaninja_cd = {}
+        self.pascoa_roleta_cd = {}
         self.rp_fichas = {}
         self.rp_acoes_cd = {}
         self.active_tasks = {}
@@ -623,6 +625,48 @@ def calcular_tempo_expiracao(horas_limite: Optional[int] = None):
     return datetime(agora.year, agora.month, agora.day, 23, 59, 59, tzinfo=BR_TZ)
 
 
+CHAMADA_INTRO_PADRAO = (
+    "Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House! "
+    "Esse espaço foi criado para confirmarmos quem permanece ativo e comprometido com a nossa House 🤍"
+)
+
+
+def montar_descricao_embed_chamada(
+    data_atual: str,
+    texto_intro: str,
+    data_hora: str,
+    emoji_botao: str,
+    timing_text: str,
+    num_presentes: int,
+) -> str:
+    """Texto completo do embed de chamada (layout original da House)."""
+    return f"""﹒⬚﹒⇆﹒🍑 ᆞ
+
+५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
+𓈒 ׂ 🪷੭ ᮫ : {texto_intro}
+
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
+[𒃵] A cada ausência não justificada, será registrado um tracinho.
+
+𑇡 📝 Ao acumular sete tracinhos, será banido automaticamente.
+Caso tenha algum compromisso, justifique sua ausência em. Estarei registrando os presentes no horário correto, então não será considerada confirmação fora do período informado.
+
+여기 ㅤ🔔✨ ; A chamada começará às {data_hora}.
+Para confirmar sua presença, reaja com o emoji indicado abaixo e sinta-se à vontade para continuar suas atividades após isso.
+✦𓂃 Utilize o emoji {emoji_botao} para responder à chamada.
+
+ⓘ Lembrando: Marcar presença e desaparecer completamente da House até a próxima chamada também resultará em registro de ausência. Compromisso é essencial para mantermos a organização e o bom funcionamento daqui.
+
+५ᅟ𐙚 ⎯ᅟᅟ❝ 🍑﹒ᥫ᭡﹐୨`﹒ꔫ﹐︶︶︶﹒୧﹐🍑 ❞
+ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 魂 🌷 𝅼ㅤׄㅤㅤ𔘓 ◖
+
+**{timing_text}**
+**✅ PRESENTES: {num_presentes}**"""
+
+
+CHAMADA_EMBED_TITLE = "🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄"
+
+
 class CallButton(Button):
     def __init__(self, call_id: str, emoji: str, expira_em: datetime):
         super().__init__(style=discord.ButtonStyle.success, label="Confirmar Presença", emoji=emoji, custom_id=f"call_{call_id}")
@@ -672,18 +716,17 @@ class CallButton(Button):
                             timing_text = f"⏰ Expira em {call['horas_duracao']} hora(s) (às {self.expira_em.strftime('%H:%M')} Brasília)"
                         else:
                             timing_text = "🌙 Expira HOJE às 23:59 (MEIA-NOITE Brasília)"
-                        descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
-५ᅟ𐙚 ⎯ᅟ︶︶︶﹒୧﹐atividade ❞ {data_atual}
-𓈒 ׂ 🪷੭ ᮫ : Boa tarde, meus amores. Sejam bem-vindos ao canal de chamada da House!
-
-ㅤ𔘓 ㅤׄㅤ ㅤׅ ㅤׄ 말 🌿 𝅼ㅤׄㅤㅤ𔘓 丶丶
-여기 ㅤ🔔✨ ; A chamada começará às {call['data_hora']}.
-✦𓂃 Utilize o emoji {call['emoji']} para responder à chamada.
-
-**{timing_text}**
-**✅ PRESENTES: {len(bot.call_participants[call_id])}**"""
+                        intro = (call.get("descricao") or "").strip() or CHAMADA_INTRO_PADRAO
+                        descricao_completa = montar_descricao_embed_chamada(
+                            data_atual,
+                            intro,
+                            call["data_hora"],
+                            call["emoji"],
+                            timing_text,
+                            len(bot.call_participants[call_id]),
+                        )
                         embed = discord.Embed(
-                            title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
+                            title=CHAMADA_EMBED_TITLE,
                             description=descricao_completa,
                             color=discord.Color.from_str("#FF69B4"),
                         )
@@ -761,7 +804,7 @@ async def encerrar_chamada_apos_tempo(call_id: str, expira_em: datetime):
                     else:
                         participantes_text = "Ninguém compareceu 😢"
                     embed_final = discord.Embed(
-                        title="📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
+                        title="📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂̷̸𝐇𝐀𝐌𝐀𝐃𝐀 [ENCERRADA]",
                         description=f"**CHAMADA ENCERRADA {motivo}**\n\nTotal de presentes: **{len(participantes)}**",
                         color=discord.Color.dark_gray(),
                     )
@@ -818,18 +861,17 @@ async def chamada(
         timing_text = f"⏰ Expira em {horas_duracao} hora(s) (às {expira_em.strftime('%H:%M')} Brasília)"
     else:
         timing_text = "🌙 Expira HOJE às 23:59 (MEIA-NOITE Brasília)"
-    desc_base = descricao or "Boa tarde! Chamada da House 🤍"
-    descricao_completa = f"""﹒⬚﹒⇆﹒🍑 ᆞ
-५ᅟ𐙚 ❞ {data_atual}
-{desc_base}
-
-여기 🔔✨ ; A chamada começará às {data_hora}.
-✦𓂃 Utilize o emoji {emoji} para responder.
-
-**{timing_text}**
-**✅ PRESENTES: 0**"""
+    intro = descricao.strip() if descricao else CHAMADA_INTRO_PADRAO
+    descricao_completa = montar_descricao_embed_chamada(
+        data_atual,
+        intro,
+        data_hora,
+        emoji,
+        timing_text,
+        0,
+    )
     embed = discord.Embed(
-        title=f"🌿ᩚ📦 𝐇𝐎𝐔𝐒𝐄 ִ 𝐂𝐇𝐀𝐌𝐀𝐃𝐀 ꒥꒦ 📄",
+        title=CHAMADA_EMBED_TITLE,
         description=descricao_completa,
         color=discord.Color.from_str("#FF69B4"),
     )
@@ -1426,6 +1468,183 @@ async def pascoa_anagrama(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=AnagramPascoaView(user_id, palavra, opcoes))
 
 
+class NinjaEggButton(Button):
+    """Um dos ①–⑤ esconde o ovo dourado (índice golden)."""
+
+    _labels = ["①", "②", "③", "④", "⑤"]
+
+    def __init__(self, game_key: str, index: int, golden: int, rnd: int, hearts: int, pts: int, uid: str):
+        super().__init__(style=discord.ButtonStyle.secondary, label=self._labels[index], row=0)
+        self.game_key = game_key
+        self.index = index
+        self.golden = golden
+        self.rnd = rnd
+        self.hearts = hearts
+        self.pts = pts
+        self.uid = uid
+
+    async def callback(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("❌ Não é seu jogo!", ephemeral=True)
+            return
+        if self.index == self.golden:
+            new_pts = self.pts + 12 + self.rnd * 10
+            if self.rnd >= 3:
+                bonus = 55
+                total = new_pts + bonus
+                bot.add_pascoa_pontos(self.uid, total)
+                if self.uid not in bot.user_balances:
+                    bot.user_balances[self.uid] = 0
+                moedas_bonus = random.randint(120, 280)
+                bot.user_balances[self.uid] += moedas_bonus
+                bot.save_data()
+                bot.pascoa_cacaninja_cd[self.uid] = datetime.now(BR_TZ).isoformat()
+                emb = discord.Embed(
+                    title="🏆 LENDÁRIO! Você limpou as 3 rodadas!",
+                    description=f"**+{total}** pts de Páscoa (com bônus final)\n**+{moedas_bonus}** moedas\n_O coelho te nomeou caçador oficial._ 🐇✨",
+                    color=discord.Color.gold(),
+                )
+                emb.set_image(url=random.choice(GIFS_COELHO))
+                await interaction.response.edit_message(embed=emb, view=None)
+            else:
+                nv = PascoaCacaNinjaView(self.game_key, self.uid, self.rnd + 1, self.hearts, new_pts)
+                emb = discord.Embed(
+                    title=f"✨ Rodada {self.rnd + 1}/3 — O coelho mudou os ovos de lugar!",
+                    description=f"Você achou o **ovo dourado**!\n💰 Pontos acumulados nesta partida: **{new_pts}**\n❤️ Vidas: **{'❤️' * self.hearts}**\n\n_A próxima rodada está mais embaralhada…_",
+                    color=discord.Color.from_str("#FF69B4"),
+                )
+                emb.set_footer(text="Só um ovo é o certo em cada rodada.")
+                await interaction.response.edit_message(embed=emb, view=nv)
+        else:
+            nh = self.hearts - 1
+            if nh <= 0:
+                consolo = self.pts // 4 if self.pts > 0 else 0
+                if consolo:
+                    bot.add_pascoa_pontos(self.uid, consolo)
+                bot.save_data()
+                bot.pascoa_cacaninja_cd[self.uid] = datetime.now(BR_TZ).isoformat()
+                lose_txt = f"Sem vidas! Fim de jogo.\n**+{consolo}** pts de consolação." if consolo else "Sem vidas! Fim de jogo.\nTreine o olhar e volte após o cooldown."
+                emb = discord.Embed(
+                    title="💀 O coelho riu e sumiu no mato…",
+                    description=lose_txt,
+                    color=discord.Color.dark_red(),
+                )
+                emb.set_image(url=random.choice(GIFS_COELHO))
+                await interaction.response.edit_message(embed=emb, view=None)
+            else:
+                nv = PascoaCacaNinjaView(self.game_key, self.uid, self.rnd, nh, self.pts)
+                emb = discord.Embed(
+                    title=f"💨 Errou! Rodada {self.rnd}/3",
+                    description=f"Isso era só casca pintada…\n❤️ Restam: **{'❤️' * nh}**\n💰 Pontos na mesa: **{self.pts}** (só ganha tudo se vencer!)\n\n_Tente outro ovo — o dourado mudou de lugar._",
+                    color=discord.Color.orange(),
+                )
+                await interaction.response.edit_message(embed=emb, view=nv)
+
+
+class PascoaCacaNinjaView(View):
+    """Minijogo: 3 acertos seguidos (por rodada), 3 vidas."""
+
+    def __init__(self, game_key: str, uid: str, rnd: int, hearts: int, pts: int):
+        super().__init__(timeout=120)
+        self.game_key = game_key
+        golden = random.randint(0, 4)
+        for i in range(5):
+            self.add_item(NinjaEggButton(game_key, i, golden, rnd, hearts, pts, uid))
+
+
+class RoletaCoelhoView(View):
+    def __init__(self, uid: str):
+        super().__init__(timeout=60)
+        self.uid = uid
+        btn = Button(label="🎰 GIRAR a Roleta do Coelho", style=discord.ButtonStyle.success, row=0)
+
+        async def girar(interaction: discord.Interaction):
+            if str(interaction.user.id) != uid:
+                await interaction.response.send_message("❌ Não é sua roleta!", ephemeral=True)
+                return
+            outcomes = [
+                ("💨 Só cheiro de cenoura… nada de ovo.", 0, 0),
+                ("🥚 Ovo de galinha (mentira, é de chocolate).", 6, 45),
+                ("🍫 Ovo médio — respeitável!", 14, 110),
+                ("✨ OVO RELUZENTE! O coelho piscou pra você.", 28, 240),
+                ("🌈 JACKPOT DO JARDIM! Chuva de ovos!", 55, 420),
+            ]
+            weights = [0.18, 0.34, 0.28, 0.14, 0.06]
+            texto, pts, moedas = random.choices(outcomes, weights=weights, k=1)[0]
+            if pts:
+                bot.add_pascoa_pontos(uid, pts)
+            if moedas:
+                if uid not in bot.user_balances:
+                    bot.user_balances[uid] = 0
+                bot.user_balances[uid] += moedas
+            bot.save_data()
+            bot.pascoa_roleta_cd[uid] = datetime.now(BR_TZ).isoformat()
+            cor = discord.Color.gold() if pts >= 28 else discord.Color.from_str("#FF69B4") if pts else discord.Color.dark_gray()
+            emb = discord.Embed(
+                title="🎰 Roleta parou em…",
+                description=f"**{texto}**\n\n🥚 **+{pts}** pts Páscoa\n🍫 **+{moedas}** moedas",
+                color=cor,
+            )
+            emb.set_image(url=random.choice(GIFS_PASCOA))
+            emb.set_footer(text="Cooldown 25 min para girar de novo.")
+            await interaction.response.edit_message(embed=emb, view=None)
+            self.stop()
+
+        btn.callback = girar
+        self.add_item(btn)
+
+
+@bot.tree.command(name="pascoa_cacaninja", description="🥷 3 rodadas, 5 ovos — ache o dourado (3 ❤️)")
+async def pascoa_cacaninja(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    agora = datetime.now(BR_TZ)
+    raw = bot.pascoa_cacaninja_cd.get(user_id)
+    if raw:
+        ult = datetime.fromisoformat(raw)
+        if ult.tzinfo is None:
+            ult = ult.replace(tzinfo=BR_TZ)
+        if agora - ult < timedelta(minutes=25):
+            m = int((timedelta(minutes=25) - (agora - ult)).total_seconds() // 60)
+            await interaction.response.send_message(f"🥷 O coelho escondeu os ovos de novo. Volte em **{m} min**.", ephemeral=True)
+            return
+    game_key = str(interaction.id)
+    emb = discord.Embed(
+        title="🥷 Caça-Ninja do Coelho",
+        description="**3 rodadas.** Em cada uma, **exatamente um** ovo (①–⑤) é o **dourado**.\n\n"
+        "• Acertou → próxima rodada (mais pontos por acerto).\n"
+        "• Errou → perde **1 ❤️** (você tem 3).\n"
+        "• **Limpe as 3** → bônus enorme + moedas.\n\n"
+        "_O coelho troca tudo a cada tentativa. Boa sorte._",
+        color=discord.Color.from_str("#FFD700"),
+    )
+    emb.set_image(url=random.choice(GIFS_OVO))
+    emb.set_footer(text="Cooldown 25 min após terminar a partida.")
+    view = PascoaCacaNinjaView(game_key, user_id, 1, 3, 0)
+    await interaction.response.send_message(embed=emb, view=view)
+
+
+@bot.tree.command(name="pascoa_roleta", description="🎰 Roleta do coelho — prêmios variados (cooldown 25min)")
+async def pascoa_roleta(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    agora = datetime.now(BR_TZ)
+    raw = bot.pascoa_roleta_cd.get(user_id)
+    if raw:
+        ult = datetime.fromisoformat(raw)
+        if ult.tzinfo is None:
+            ult = ult.replace(tzinfo=BR_TZ)
+        if agora - ult < timedelta(minutes=25):
+            m = int((timedelta(minutes=25) - (agora - ult)).total_seconds() // 60)
+            await interaction.response.send_message(f"🎰 A roleta esfriando… **{m} min**.", ephemeral=True)
+            return
+    emb = discord.Embed(
+        title="🎰 Roleta do Coelho da Páscoa",
+        description="Um giro, um destino. Pode sair **nada**, ovos comuns ou **jackpot raro**.\n\nClique em **GIRAR** quando estiver pronto(a).",
+        color=discord.Color.from_str("#FF69B4"),
+    )
+    emb.set_thumbnail(url=random.choice(GIFS_PASCOA))
+    await interaction.response.send_message(embed=emb, view=RoletaCoelhoView(user_id))
+
+
 @bot.tree.command(name="pascoa_caca", description="🐇 Caçar o coelho (cooldown 1h)")
 async def pascoa_caca(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
@@ -1664,35 +1883,95 @@ async def pascoa_info(interaction: discord.Interaction):
     )
     embed.add_field(
         name="Comandos",
-        value="`/pascoa_daily` `/pascoa_quiz` `/pascoa_memoria` `/pascoa_anagrama`\n`/pascoa_caca` `/pascoa_ovo` `/pascoa_corrida` `/pascoa_slot`\n`/pascoa_chocolate` `/pascoa_ranking` `/pascoa_pontos`",
+        value="`/pascoa_daily` `/pascoa_quiz` `/pascoa_memoria` `/pascoa_anagrama`\n"
+        "`/pascoa_cacaninja` `/pascoa_roleta` — **novos**\n"
+        "`/pascoa_caca` `/pascoa_ovo` `/pascoa_corrida` `/pascoa_slot`\n"
+        "`/pascoa_chocolate` `/pascoa_ranking` `/pascoa_pontos`",
         inline=False,
     )
     await interaction.response.send_message(embed=embed)
 
 
+# Giphy = URL direto .gif (Discord embute bem). Tenor /m/... costuma falhar no embed.set_image.
 GIFS_RP = {
     "abraco": [
-        "https://media1.tenor.com/m/SYsRdiK-T7gAAAAd/hug-anime.gif",
-        "https://media1.tenor.com/m/BFmsQg9J1ZMAAAAd/chikako-hugging-otohime-for-the-first-and-she-confused.gif",
+        "https://media.giphy.com/media/1JmGiBtqTuehfYxuy9/giphy.gif",
+        "https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif",
+        "https://media.giphy.com/media/l0MYC0LajPMPoXORq/giphy.gif",
+        "https://media.giphy.com/media/26gspipWnu5Dz4rRS/giphy.gif",
+        "https://media.giphy.com/media/Zqlv6aqpNNOd2/giphy.gif",
     ],
     "beijo": [
-        "https://media1.tenor.com/m/kmxEaVuW8AoAAAAd/kiss-gentle-kiss.gif",
-        "https://media1.tenor.com/m/89DvSXKzlVwAAAAd/anime-kiss-kiss.gif",
+        "https://media.giphy.com/media/bmrxNoeuqdsKWEXCYH/giphy.gif",
+        "https://media.giphy.com/media/12XvRnZ6MRcLq0/giphy.gif",
+        "https://media.giphy.com/media/IWrQSJARGbC6bad78H/giphy.gif",
+        "https://media.giphy.com/media/3o7TKU1IgV89jT9ZQ4/giphy.gif",
+        "https://media.giphy.com/media/26AHG5KGFxSkUWw1i/giphy.gif",
     ],
-    "choro": ["https://media1.tenor.com/m/j_jAo-neywoAAAAd/marin-crying-marin-kitagawa.gif"],
-    "riso": ["https://media1.tenor.com/m/K6WDm9L78mgAAAAd/rezero-rem.gif"],
-    "sono": ["https://media1.tenor.com/m/d9AcU5UmEdoAAAAd/anime-fran.gif"],
-    "briga": ["https://media1.tenor.com/m/b0ZXAm867pYAAAAd/jujutsu-kaisen-season-3.gif"],
-    "dance": ["https://media1.tenor.com/m/9hSEFOrYc8cAAAAd/sakura-trick-dancing.gif"],
-    "pensando": ["https://media1.tenor.com/m/f3XybJki0H4AAAAd/anime-thinking.gif"],
-    "susto": ["https://media1.tenor.com/m/nEh0yvlMrEgAAAAd/anime-scare.gif"],
-    "olhando": ["https://media1.tenor.com/m/rVdLW8Oi97kAAAAd/what-aki-adagaki.gif"],
-    "envergonhado": ["https://media1.tenor.com/m/GbgGJT3nsVUAAAAd/flustered-flushed.gif"],
-    "mimos": ["https://media1.tenor.com/m/MVK93pHLpz4AAAAd/anime-hug-anime.gif"],
-    "raiva": ["https://media1.tenor.com/m/hkoyf1VeaZ4AAAAd/anime-angry.gif"],
-    "curiosidade": ["https://media1.tenor.com/m/qCuO6yW3qS0AAAAd/tonikawa-anime.gif"],
-    "tristeza": ["https://media1.tenor.com/m/ukwvYi0Olk8AAAAd/sad-anime-guy-lonely-anime-guy.gif"],
-    "comemoracao": ["https://media1.tenor.com/m/_KYN7H6-42kAAAAd/celebrando-celebraci%C3%B3n.gif"],
+    "choro": [
+        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
+        "https://media.giphy.com/media/d2lcHJUH5D0KM/giphy.gif",
+        "https://media.giphy.com/media/BEob5qwFkSJ7G/giphy.gif",
+    ],
+    "riso": [
+        "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",
+        "https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif",
+        "https://media.giphy.com/media/3ohzdMvc1w2Vl0pZ6w/giphy.gif",
+    ],
+    "sono": [
+        "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif",
+        "https://media.giphy.com/media/l0HlNQ03J5JxX6lva/giphy.gif",
+        "https://media.giphy.com/media/3ohzdIuqJ1006bcgU8/giphy.gif",
+    ],
+    "briga": [
+        "https://media.giphy.com/media/kiBkwEXfBTWPK/giphy.gif",
+        "https://media.giphy.com/media/l3V0j3ytFyGHqiV7W/giphy.gif",
+        "https://media.giphy.com/media/3o7aCTPPm4OHfRLSH6/giphy.gif",
+    ],
+    "dance": [
+        "https://media.giphy.com/media/3o7TKSjRrfIPiNh9XS/giphy.gif",
+        "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
+        "https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif",
+    ],
+    "pensando": [
+        "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
+        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+    ],
+    "susto": [
+        "https://media.giphy.com/media/l3V0gGZJa5anBW5t6/giphy.gif",
+        "https://media.giphy.com/media/3o7aCTPPm4OHfRLSH6/giphy.gif",
+    ],
+    "olhando": [
+        "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif",
+        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+    ],
+    "envergonhado": [
+        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
+        "https://media.giphy.com/media/l3V0gGZJa5anBW5t6/giphy.gif",
+    ],
+    "mimos": [
+        "https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif",
+        "https://media.giphy.com/media/l0MYC0LajPMPoXORq/giphy.gif",
+        "https://media.giphy.com/media/26gspipWnu5Dz4rRS/giphy.gif",
+        "https://media.giphy.com/media/Zqlv6aqpNNOd2/giphy.gif",
+    ],
+    "raiva": [
+        "https://media.giphy.com/media/kiBkwEXfBTWPK/giphy.gif",
+        "https://media.giphy.com/media/l3V0j3ytFyGHqiV7W/giphy.gif",
+    ],
+    "curiosidade": [
+        "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
+        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+    ],
+    "tristeza": [
+        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
+        "https://media.giphy.com/media/d2lcHJUH5D0KM/giphy.gif",
+    ],
+    "comemoracao": [
+        "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",
+        "https://media.giphy.com/media/3ohzdIuqJ1006bcgU8/giphy.gif",
+        "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
+    ],
 }
 
 RP_CORES = {
