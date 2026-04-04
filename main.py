@@ -17,6 +17,10 @@ import os
 import time
 import logging
 import traceback
+import io
+import re
+import urllib.error
+import urllib.request
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 BR_TZ = timezone(timedelta(hours=-3))
@@ -366,6 +370,10 @@ class Fort(discord.Client):
         self.pascoa_corrida = {}
         self.pascoa_cacaninja_cd = {}
         self.pascoa_roleta_cd = {}
+        self.pascoa_maratona_cd = {}
+        self.pascoa_boss_cd = {}
+        self.pascoa_campo_cd = {}
+        self.pascoa_campo_state = {}
         self.rp_fichas = {}
         self.rp_acoes_cd = {}
         self.active_tasks = {}
@@ -1645,6 +1653,357 @@ async def pascoa_roleta(interaction: discord.Interaction):
     await interaction.response.send_message(embed=emb, view=RoletaCoelhoView(user_id))
 
 
+def _boss_hp_bar(hp: int, max_hp: int = 100) -> str:
+    n = max(0, min(12, int(hp / max_hp * 12)))
+    return f"`{'█' * n}{'░' * (12 - n)}` **{hp}** / {max_hp} HP"
+
+
+async def _maratona_finish_cd(uid: str):
+    bot.pascoa_maratona_cd[uid] = datetime.now(BR_TZ).isoformat()
+
+
+def _make_marathon_callback(user_id: str, questions: list, q_index: int, pick: int, correta_idx: int, pts: int, acertos: int):
+    async def cb(interaction: discord.Interaction):
+        if str(interaction.user.id) != user_id:
+            await interaction.response.send_message("❌ Essa maratona é de outra pessoa!", ephemeral=True)
+            return
+        if pick == correta_idx:
+            novo_pts = pts + 15 + q_index * 8
+            novo_ac = acertos + 1
+            if q_index + 1 >= len(questions):
+                bonus = 55
+                total = novo_pts + bonus
+                moedas = random.randint(100, 220)
+                bot.add_pascoa_pontos(user_id, total)
+                bot.user_balances.setdefault(user_id, 0)
+                bot.user_balances[user_id] += moedas
+                bot.save_data()
+                await _maratona_finish_cd(user_id)
+                emb = discord.Embed(
+                    title="🏆 MARATONA LENDÁRIA!",
+                    description=f"**3/3** certas!\n\n🥚 **+{total}** pts (inclui bônus **+{bonus}**)\n🍫 **+{moedas}** moedas\n\n_O coelho tirou o chapéu pra você._",
+                    color=discord.Color.gold(),
+                )
+                emb.set_image(url=random.choice(GIFS_PASCOA))
+                await interaction.response.edit_message(embed=emb, view=None)
+            else:
+                prox = questions[q_index + 1]
+                emb = discord.Embed(
+                    title=f"🔥 Maratona Páscoa — Pergunta {q_index + 2}/3",
+                    description=f"✅ **Certo!** (+{15 + q_index * 8} pts nesta)\n\n**{prox['pergunta']}**",
+                    color=discord.Color.from_str("#FF69B4"),
+                )
+                emb.set_footer(text=f"Pontos acumulados na maratona: {novo_pts} • Acertos: {novo_ac}/3")
+                nv = PascoaMaratonaView(user_id, questions, q_index + 1, novo_pts, novo_ac)
+                await interaction.response.edit_message(embed=emb, view=nv)
+        else:
+            consolo = max(4, pts // 3) if pts else 3
+            bot.add_pascoa_pontos(user_id, consolo)
+            bot.save_data()
+            await _maratona_finish_cd(user_id)
+            certa = questions[q_index]["opcoes"][correta_idx]
+            emb = discord.Embed(
+                title="💥 Trilha interrompida!",
+                description=f"Resposta certa era: **{certa}**\n\nVocê acertou **{acertos}/3** antes de tropeçar.\n🥚 **+{consolo}** pts de consolação\n\n_Tente a maratona de novo depois do cooldown._",
+                color=discord.Color.dark_red(),
+            )
+            emb.set_image(url=random.choice(GIFS_OVO))
+            await interaction.response.edit_message(embed=emb, view=None)
+
+    return cb
+
+
+class PascoaMaratonaView(View):
+    """Três perguntas seguidas; errar uma termina com prêmio menor."""
+
+    def __init__(self, user_id: str, questions: list, q_index: int, pts: int, acertos: int):
+        super().__init__(timeout=150)
+        self.user_id = user_id
+        q = questions[q_index]
+        cores = [
+            discord.ButtonStyle.primary,
+            discord.ButtonStyle.success,
+            discord.ButtonStyle.danger,
+            discord.ButtonStyle.secondary,
+        ]
+        for i, op in enumerate(q["opcoes"]):
+            btn = Button(label=op[:75], style=cores[i % len(cores)])
+            btn.callback = _make_marathon_callback(user_id, questions, q_index, i, q["correta"], pts, acertos)
+            self.add_item(btn)
+
+
+class BossAtaqueButton(Button):
+    def __init__(self, uid: str, boss_hp: int, hearts: int, tipo: str):
+        rotulos = {"choc": "🍫 Chocolate", "cen": "🥕 Cenoura", "rede": "🪤 Rede"}
+        super().__init__(style=discord.ButtonStyle.primary, label=rotulos[tipo], row={"choc": 0, "cen": 0, "rede": 1}[tipo])
+        self.uid = uid
+        self.boss_hp = boss_hp
+        self.hearts = hearts
+        self.tipo = tipo
+
+    async def callback(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("❌ Não é sua batalha!", ephemeral=True)
+            return
+        faixas = {"choc": (20, 36), "cen": (14, 30), "rede": (22, 40)}
+        dano = random.randint(*faixas[self.tipo])
+        if random.random() < 0.14:
+            dano = int(dano * 1.55)
+            crit_txt = " **CRÍTICO!**"
+        else:
+            crit_txt = ""
+        nb = self.boss_hp - dano
+        narr = [
+            f"Seu ataque **{self.tipo}** causou **{dano}** de dano{crit_txt}!",
+            f"O coelho girou no ar e levou **{dano}** de impacto{crit_txt}!",
+            f"Plim! **{dano}** de dano — o jardim tremeu{crit_txt}!",
+        ]
+        linhas = [random.choice(narr)]
+        hearts = self.hearts
+        if nb > 0 and random.random() < 0.36:
+            hearts -= 1
+            linhas.append(
+                random.choice(
+                    [
+                        "🐇 **Contra-ataque!** O coelho te acertou com uma cenoura-bumerangue — **-1 ❤️**!",
+                        "🐇 Ele **pisou no seu pé** com força de coelho musculoso — **-1 ❤️**!",
+                        "🐇 **Orelhas supersônicas** te deixaram tonto — **-1 ❤️**!",
+                    ]
+                )
+            )
+        if nb <= 0:
+            pts = random.randint(70, 110)
+            moedas = random.randint(180, 350)
+            bot.add_pascoa_pontos(self.uid, pts)
+            bot.user_balances.setdefault(self.uid, 0)
+            bot.user_balances[self.uid] += moedas
+            bot.save_data()
+            bot.pascoa_boss_cd[self.uid] = datetime.now(BR_TZ).isoformat()
+            emb = discord.Embed(
+                title="🎊 COELHO BOSS DERROTADO!",
+                description="\n".join(linhas)
+                + f"\n\n**O coelho caiu de bunda no mato e deixou o tesouro!**\n\n🥚 **+{pts}** pts\n🍫 **+{moedas}** moedas",
+                color=discord.Color.gold(),
+            )
+            emb.set_image(url=random.choice(GIFS_COELHO))
+            emb.set_footer(text="Cooldown 30 min para outra boss fight.")
+            await interaction.response.edit_message(embed=emb, view=None)
+            return
+        if hearts <= 0:
+            bot.pascoa_boss_cd[self.uid] = datetime.now(BR_TZ).isoformat()
+            consolo = random.randint(8, 18)
+            bot.add_pascoa_pontos(self.uid, consolo)
+            bot.save_data()
+            emb = discord.Embed(
+                title="💀 Você desmaiou de cansaço…",
+                description="\n".join(linhas)
+                + f"\n\nO coelho boss **venceu** desta vez.\n🥚 **+{consolo}** pts pelo esforço heróico.",
+                color=discord.Color.dark_red(),
+            )
+            emb.set_image(url=random.choice(GIFS_COELHO))
+            await interaction.response.edit_message(embed=emb, view=None)
+            return
+        desc = (
+            "**🐰 COELHO BOSS — Batalha do Jardim**\n\n"
+            + _boss_hp_bar(nb)
+            + f"\n\n**Suas vidas:** {'❤️' * hearts}\n\n"
+            + "\n".join(linhas)
+            + "\n\n_Escolha o próximo golpe!_"
+        )
+        emb = discord.Embed(title="⚔️ Round continua…", description=desc, color=discord.Color.from_str("#FF69B4"))
+        nv = PascoaBossView(self.uid, nb, hearts)
+        await interaction.response.edit_message(embed=emb, view=nv)
+
+
+class PascoaBossView(View):
+    def __init__(self, uid: str, boss_hp: int, hearts: int):
+        super().__init__(timeout=180)
+        for t in ("choc", "cen", "rede"):
+            self.add_item(BossAtaqueButton(uid, boss_hp, hearts, t))
+
+
+class CampoOvoButton(Button):
+    def __init__(self, game_id: str, index: int):
+        super().__init__(style=discord.ButtonStyle.secondary, label="🥚", row=index // 4)
+        self.game_id = game_id
+        self.index = index
+
+    async def callback(self, interaction: discord.Interaction):
+        st = bot.pascoa_campo_state.get(self.game_id)
+        if not st:
+            await interaction.response.send_message("❌ Jogo expirado.", ephemeral=True)
+            return
+        if str(interaction.user.id) != st["uid"]:
+            await interaction.response.send_message("❌ Não é seu campo!", ephemeral=True)
+            return
+        uid = st["uid"]
+        if self.index in st["revelados"]:
+            await interaction.response.send_message("❌ Você já abriu esse ovo!", ephemeral=True)
+            return
+        st["revelados"].add(self.index)
+        if self.index in st["podres"]:
+            for child in self.view.children:
+                if isinstance(child, CampoOvoButton):
+                    child.disabled = True
+                    if child.index in st["podres"]:
+                        child.label = "🤢"
+                        child.style = discord.ButtonStyle.danger
+                    elif child.index in st["bons_coletados"]:
+                        child.label = "✨"
+                        child.style = discord.ButtonStyle.success
+                    else:
+                        child.label = "🥚"
+            bot.pascoa_campo_cd[uid] = datetime.now(BR_TZ).isoformat()
+            del bot.pascoa_campo_state[self.game_id]
+            emb = discord.Embed(
+                title="🤢 ERA OVO PODRE!",
+                description="**BOOM** — cheiro horrível. Fim de jogo.\n\nOs ✨ eram os bons. Os 🤢 eram armadilha do coelho saboteador.",
+                color=discord.Color.dark_red(),
+            )
+            emb.set_image(url=random.choice(GIFS_OVO))
+            await interaction.response.edit_message(embed=emb, view=self.view)
+            return
+        st["bons_coletados"].add(self.index)
+        self.label = "✨"
+        self.style = discord.ButtonStyle.success
+        self.disabled = True
+        if len(st["bons_coletados"]) >= 3:
+            pts = random.randint(35, 55)
+            moedas = random.randint(90, 200)
+            bot.add_pascoa_pontos(uid, pts)
+            bot.user_balances.setdefault(uid, 0)
+            bot.user_balances[uid] += moedas
+            bot.save_data()
+            bot.pascoa_campo_cd[uid] = datetime.now(BR_TZ).isoformat()
+            del bot.pascoa_campo_state[self.game_id]
+            for child in self.view.children:
+                if isinstance(child, CampoOvoButton):
+                    child.disabled = True
+                    if child.index in st["podres"]:
+                        child.label = "🤢"
+                        child.style = discord.ButtonStyle.danger
+                    elif child.index in st["bons_coletados"]:
+                        child.label = "✨"
+                        child.style = discord.ButtonStyle.success
+            emb = discord.Embed(
+                title="🌟 CAMPO LIMPO!",
+                description="Você achou **3 ovos de chocolate** sem pisar nos podres!\n\n🥚 **+{0}** pts\n🍫 **+{1}** moedas\n\n_O coelho admite derrota com um sorriso._".format(
+                    pts, moedas
+                ),
+                color=discord.Color.gold(),
+            )
+            emb.set_image(url=random.choice(GIFS_CHOCOLHATE))
+            await interaction.response.edit_message(embed=emb, view=self.view)
+            return
+        restam = 3 - len(st["bons_coletados"])
+        emb = discord.Embed(
+            title="✨ Bom ovo!",
+            description=f"Chocolate legítimo! Faltam **{restam}** ovo(s) bom(ns).\n\n**Dica:** existem **2 ovos podres** escondidos no campo. Escolha com cuidado.",
+            color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=emb, view=self.view)
+
+
+class PascoaCampoView(View):
+    """6 ovos: 2 podres, 4 bons. Colete 3 bons sem abrir podre."""
+
+    def __init__(self, game_id: str):
+        super().__init__(timeout=120)
+        for i in range(6):
+            self.add_item(CampoOvoButton(game_id, i))
+
+
+@bot.tree.command(name="pascoa_maratona", description="🔥 3 perguntas seguidas — prêmio cresce (cooldown 20min)")
+async def pascoa_maratona(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    agora = datetime.now(BR_TZ)
+    raw = bot.pascoa_maratona_cd.get(uid)
+    if raw:
+        ult = datetime.fromisoformat(raw)
+        if ult.tzinfo is None:
+            ult = ult.replace(tzinfo=BR_TZ)
+        if agora - ult < timedelta(minutes=20):
+            m = int((timedelta(minutes=20) - (agora - ult)).total_seconds() // 60)
+            await interaction.response.send_message(f"🔥 Descanse o cérebro! Maratona de novo em **{m} min**.", ephemeral=True)
+            return
+    qs = random.sample(QUIZ_PASCOA, min(3, len(QUIZ_PASCOA)))
+    while len(qs) < 3:
+        qs.append(random.choice(QUIZ_PASCOA))
+    q0 = qs[0]
+    emb = discord.Embed(
+        title="🔥 Maratona Páscoa — Pergunta 1/3",
+        description="**Três perguntas seguidas.** Cada acerto vale mais que o anterior.\n"
+        "Errar **qualquer uma** acaba a maratona (você ganha pts de consolação).\n\n"
+        f"**{q0['pergunta']}**",
+        color=discord.Color.from_str("#FFD700"),
+    )
+    emb.set_footer(text="Bônus gigante se acertar as 3!")
+    emb.set_thumbnail(url=random.choice(GIFS_PASCOA))
+    await interaction.response.send_message(embed=emb, view=PascoaMaratonaView(uid, qs, 0, 0, 0))
+
+
+@bot.tree.command(name="pascoa_boss", description="⚔️ Lute contra o Coelho Boss (cooldown 30min)")
+async def pascoa_boss(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    agora = datetime.now(BR_TZ)
+    raw = bot.pascoa_boss_cd.get(uid)
+    if raw:
+        ult = datetime.fromisoformat(raw)
+        if ult.tzinfo is None:
+            ult = ult.replace(tzinfo=BR_TZ)
+        if agora - ult < timedelta(minutes=30):
+            m = int((timedelta(minutes=30) - (agora - ult)).total_seconds() // 60)
+            await interaction.response.send_message(f"⚔️ O coelho ainda está se recuperando. Volte em **{m} min**.", ephemeral=True)
+            return
+    boss_hp = 100
+    hearts = 3
+    emb = discord.Embed(
+        title="⚔️ COELHO BOSS — O Jardim é dele!",
+        description=f"Um coelho **absurdamente poderoso** guarda o estoque de ovos.\n\n{_boss_hp_bar(boss_hp)}\n\n**Suas vidas:** ❤️❤️❤️\n\n"
+        "• **🍫 Chocolate** — dano estável\n"
+        "• **🥕 Cenoura** — dano médio (às vezes ele fica distraído)\n"
+        "• **🪤 Rede** — dano alto se pegar\n\n"
+        "_Ele pode revidar: cuidado com as orelhas._",
+        color=discord.Color.from_str("#FF1493"),
+    )
+    emb.set_image(url=random.choice(GIFS_COELHO))
+    emb.set_footer(text="Derrote-o antes de perder todos os ❤️!")
+    await interaction.response.send_message(embed=emb, view=PascoaBossView(uid, boss_hp, hearts))
+
+
+@bot.tree.command(name="pascoa_campo", description="🥚 6 ovos, 2 são podres — ache 3 bons (cooldown 20min)")
+async def pascoa_campo(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    agora = datetime.now(BR_TZ)
+    raw = bot.pascoa_campo_cd.get(uid)
+    if raw:
+        ult = datetime.fromisoformat(raw)
+        if ult.tzinfo is None:
+            ult = ult.replace(tzinfo=BR_TZ)
+        if agora - ult < timedelta(minutes=20):
+            m = int((timedelta(minutes=20) - (agora - ult)).total_seconds() // 60)
+            await interaction.response.send_message(f"🥚 O campo ainda cheira mal… Volte em **{m} min**.", ephemeral=True)
+            return
+    game_id = str(interaction.id)
+    podres = set(random.sample(range(6), 2))
+    bot.pascoa_campo_state[game_id] = {
+        "uid": uid,
+        "podres": podres,
+        "bons_coletados": set(),
+        "revelados": set(),
+    }
+    emb = discord.Embed(
+        title="🥚 Campo Minado do Coelho",
+        description="**6 ovos.** Quatro são **chocolate bom**, dois são **podres** (armadilha).\n\n"
+        "Abra **3 ovos bons** sem acertar um podre.\n\n"
+        "_Sorte e intuição — ou puro caos._",
+        color=discord.Color.from_str("#90EE90"),
+    )
+    emb.set_image(url=random.choice(GIFS_OVO))
+    emb.set_footer(text="Clique nos ovos 🥚")
+    await interaction.response.send_message(embed=emb, view=PascoaCampoView(game_id))
+
+
 @bot.tree.command(name="pascoa_caca", description="🐇 Caçar o coelho (cooldown 1h)")
 async def pascoa_caca(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
@@ -1884,7 +2243,8 @@ async def pascoa_info(interaction: discord.Interaction):
     embed.add_field(
         name="Comandos",
         value="`/pascoa_daily` `/pascoa_quiz` `/pascoa_memoria` `/pascoa_anagrama`\n"
-        "`/pascoa_cacaninja` `/pascoa_roleta` — **novos**\n"
+        "`/pascoa_maratona` `/pascoa_boss` `/pascoa_campo` — **história + risco**\n"
+        "`/pascoa_cacaninja` `/pascoa_roleta`\n"
         "`/pascoa_caca` `/pascoa_ovo` `/pascoa_corrida` `/pascoa_slot`\n"
         "`/pascoa_chocolate` `/pascoa_ranking` `/pascoa_pontos`",
         inline=False,
@@ -1892,87 +2252,141 @@ async def pascoa_info(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-# Giphy = URL direto .gif (Discord embute bem). Tenor /m/... costuma falhar no embed.set_image.
+# URLs no formato i.giphy.com (CDN direto). O envio usa ANEXO para o Discord mostrar GIF animado.
 GIFS_RP = {
     "abraco": [
-        "https://media.giphy.com/media/1JmGiBtqTuehfYxuy9/giphy.gif",
-        "https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif",
-        "https://media.giphy.com/media/l0MYC0LajPMPoXORq/giphy.gif",
-        "https://media.giphy.com/media/26gspipWnu5Dz4rRS/giphy.gif",
-        "https://media.giphy.com/media/Zqlv6aqpNNOd2/giphy.gif",
+        "https://i.giphy.com/1JmGiBtqTuehfYxuy9.gif",
+        "https://i.giphy.com/3M4NpbLCTxBqU.gif",
+        "https://i.giphy.com/l0MYC0LajPMPoXORq.gif",
+        "https://i.giphy.com/26gspipWnu5Dz4rRS.gif",
+        "https://i.giphy.com/Zqlv6aqpNNOd2.gif",
+        "https://i.giphy.com/xT5LMHxhOfscxPfIfm.gif",
     ],
     "beijo": [
-        "https://media.giphy.com/media/bmrxNoeuqdsKWEXCYH/giphy.gif",
-        "https://media.giphy.com/media/12XvRnZ6MRcLq0/giphy.gif",
-        "https://media.giphy.com/media/IWrQSJARGbC6bad78H/giphy.gif",
-        "https://media.giphy.com/media/3o7TKU1IgV89jT9ZQ4/giphy.gif",
-        "https://media.giphy.com/media/26AHG5KGFxSkUWw1i/giphy.gif",
+        "https://i.giphy.com/Gf3fU0qU4ahnG.gif",
+        "https://i.giphy.com/12XvRnZ6MRcLq0.gif",
+        "https://i.giphy.com/3o7abldW0zBuuKRnEI.gif",
+        "https://i.giphy.com/3o7TKU1IgV89jT9ZQ4.gif",
+        "https://i.giphy.com/26AHG5KGFxSkUWw1i.gif",
     ],
     "choro": [
-        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
-        "https://media.giphy.com/media/d2lcHJUH5D0KM/giphy.gif",
-        "https://media.giphy.com/media/BEob5qwFkSJ7G/giphy.gif",
+        "https://i.giphy.com/ISOckXUbnVfQ4.gif",
+        "https://i.giphy.com/d2lcHJUH5D0KM.gif",
+        "https://i.giphy.com/BEob5qwFkSJ7G.gif",
     ],
     "riso": [
-        "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",
-        "https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif",
-        "https://media.giphy.com/media/3ohzdMvc1w2Vl0pZ6w/giphy.gif",
+        "https://i.giphy.com/5GoVLqeAOo6PK.gif",
+        "https://i.giphy.com/l3q2K5jinAlChoCLS.gif",
+        "https://i.giphy.com/3ohzdMvc1w2Vl0pZ6w.gif",
     ],
     "sono": [
-        "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif",
-        "https://media.giphy.com/media/l0HlNQ03J5JxX6lva/giphy.gif",
-        "https://media.giphy.com/media/3ohzdIuqJ1006bcgU8/giphy.gif",
+        "https://i.giphy.com/3o7btPCcdNniyf0ArS.gif",
+        "https://i.giphy.com/l0HlNQ03J5JxX6lva.gif",
+        "https://i.giphy.com/3ohzdIuqJ1006bcgU8.gif",
     ],
     "briga": [
-        "https://media.giphy.com/media/kiBkwEXfBTWPK/giphy.gif",
-        "https://media.giphy.com/media/l3V0j3ytFyGHqiV7W/giphy.gif",
-        "https://media.giphy.com/media/3o7aCTPPm4OHfRLSH6/giphy.gif",
+        "https://i.giphy.com/kiBkwEXfBTWPK.gif",
+        "https://i.giphy.com/l3V0j3ytFyGHqiV7W.gif",
+        "https://i.giphy.com/3o7aCTPPm4OHfRLSH6.gif",
     ],
     "dance": [
-        "https://media.giphy.com/media/3o7TKSjRrfIPiNh9XS/giphy.gif",
-        "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
-        "https://media.giphy.com/media/5xaOcLGvzHxDKjufnLW/giphy.gif",
+        "https://i.giphy.com/3o7TKSjRrfIPiNh9XS.gif",
+        "https://i.giphy.com/l0HlBO7eyXzSZkJri.gif",
+        "https://i.giphy.com/5xaOcLGvzHxDKjufnLW.gif",
     ],
     "pensando": [
-        "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
-        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+        "https://i.giphy.com/3o7bu3XilJ5BOiSGic.gif",
+        "https://i.giphy.com/26ufdipQqU2lhNA4g.gif",
     ],
     "susto": [
-        "https://media.giphy.com/media/l3V0gGZJa5anBW5t6/giphy.gif",
-        "https://media.giphy.com/media/3o7aCTPPm4OHfRLSH6/giphy.gif",
+        "https://i.giphy.com/l3V0gGZJa5anBW5t6.gif",
+        "https://i.giphy.com/3o7aCTPPm4OHfRLSH6.gif",
     ],
     "olhando": [
-        "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif",
-        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+        "https://i.giphy.com/3o7btPCcdNniyf0ArS.gif",
+        "https://i.giphy.com/26ufdipQqU2lhNA4g.gif",
     ],
     "envergonhado": [
-        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
-        "https://media.giphy.com/media/l3V0gGZJa5anBW5t6/giphy.gif",
+        "https://i.giphy.com/ISOckXUbnVfQ4.gif",
+        "https://i.giphy.com/l3V0gGZJa5anBW5t6.gif",
     ],
     "mimos": [
-        "https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif",
-        "https://media.giphy.com/media/l0MYC0LajPMPoXORq/giphy.gif",
-        "https://media.giphy.com/media/26gspipWnu5Dz4rRS/giphy.gif",
-        "https://media.giphy.com/media/Zqlv6aqpNNOd2/giphy.gif",
+        "https://i.giphy.com/3M4NpbLCTxBqU.gif",
+        "https://i.giphy.com/l0MYC0LajPMPoXORq.gif",
+        "https://i.giphy.com/26gspipWnu5Dz4rRS.gif",
+        "https://i.giphy.com/Zqlv6aqpNNOd2.gif",
     ],
     "raiva": [
-        "https://media.giphy.com/media/kiBkwEXfBTWPK/giphy.gif",
-        "https://media.giphy.com/media/l3V0j3ytFyGHqiV7W/giphy.gif",
+        "https://i.giphy.com/kiBkwEXfBTWPK.gif",
+        "https://i.giphy.com/l3V0j3ytFyGHqiV7W.gif",
     ],
     "curiosidade": [
-        "https://media.giphy.com/media/3o7bu3XilJ5BOiSGic/giphy.gif",
-        "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif",
+        "https://i.giphy.com/3o7bu3XilJ5BOiSGic.gif",
+        "https://i.giphy.com/26ufdipQqU2lhNA4g.gif",
     ],
     "tristeza": [
-        "https://media.giphy.com/media/ISOckXUbnVfQ4/giphy.gif",
-        "https://media.giphy.com/media/d2lcHJUH5D0KM/giphy.gif",
+        "https://i.giphy.com/ISOckXUbnVfQ4.gif",
+        "https://i.giphy.com/d2lcHJUH5D0KM.gif",
     ],
     "comemoracao": [
-        "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",
-        "https://media.giphy.com/media/3ohzdIuqJ1006bcgU8/giphy.gif",
-        "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
+        "https://i.giphy.com/5GoVLqeAOo6PK.gif",
+        "https://i.giphy.com/3ohzdIuqJ1006bcgU8.gif",
+        "https://i.giphy.com/l0HlBO7eyXzSZkJri.gif",
     ],
 }
+
+
+def _normalize_gif_url(url: str) -> str:
+    m = re.search(r"media\.giphy\.com/media/([a-zA-Z0-9]+)/giphy\.gif", url)
+    if m:
+        return f"https://i.giphy.com/{m.group(1)}.gif"
+    return url
+
+
+def _download_gif_bytes(url: str) -> Optional[bytes]:
+    url = _normalize_gif_url(url)
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "image/gif,image/webp,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = resp.read()
+        if len(data) < 80 or len(data) > 8 * 1024 * 1024:
+            return None
+        if data.startswith(b"GIF89a") or data.startswith(b"GIF87a"):
+            return data
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        pass
+    return None
+
+
+async def enviar_embed_com_gif(
+    interaction: discord.Interaction,
+    embed: discord.Embed,
+    gif_url: str,
+    *,
+    ephemeral: bool = False,
+) -> None:
+    """
+    Discord costuma NÃO animar / nem mostrar GIF só com embed.set_image(url=...).
+    Baixamos o .gif e enviamos como arquivo — aí a animação aparece no cliente.
+    """
+    raw = await asyncio.to_thread(_download_gif_bytes, gif_url)
+    if raw:
+        embed.set_image(url="attachment://fort_rp.gif")
+        await interaction.response.send_message(
+            embed=embed,
+            file=discord.File(io.BytesIO(raw), filename="fort_rp.gif"),
+            ephemeral=ephemeral,
+        )
+    else:
+        logging.warning("GIF não baixou (%s) — fallback só URL no embed", gif_url[:80])
+        embed.set_image(url=_normalize_gif_url(gif_url))
+        await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
 
 RP_CORES = {
     "abraco": discord.Color.from_str("#FF69B4"),
@@ -2002,16 +2416,15 @@ gifs_matar = GIFS_RP["briga"]
 
 
 async def rp_acao(interaction: discord.Interaction, acao: str, titulo: str, membro: Optional[discord.Member], sozinho: str, com_alvo: str):
-    gif = random.choice(GIFS_RP.get(acao, ["https://media.giphy.com/media/3ZnBrkqoaI2hq/giphy.gif"]))
+    gif = random.choice(GIFS_RP.get(acao, ["https://i.giphy.com/3ZnBrkqoaI2hq.gif"]))
     cor = RP_CORES.get(acao, discord.Color.blue())
     if membro and membro != interaction.user:
         desc = com_alvo.format(user=interaction.user.mention, alvo=membro.mention)
     else:
         desc = sozinho.format(user=interaction.user.mention)
     embed = discord.Embed(title=titulo, description=desc, color=cor)
-    embed.set_image(url=gif)
     embed.timestamp = datetime.now(BR_TZ)
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_abraco", description="🤗 Abraço em RP")
@@ -2032,9 +2445,8 @@ async def rp_chora(interaction: discord.Interaction, motivo: str = ""):
         d += f": *{motivo}*"
     d += " 😭"
     embed = discord.Embed(title="😭 …", description=d, color=discord.Color.blue())
-    embed.set_image(url=gif)
     embed.timestamp = datetime.now(BR_TZ)
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_ri", description="😂 Rir em RP")
@@ -2055,9 +2467,8 @@ async def rp_dorme(interaction: discord.Interaction):
         ),
         color=discord.Color.dark_blue(),
     )
-    embed.set_image(url=gif)
     embed.timestamp = datetime.now(BR_TZ)
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_briga", description="💢 Brigar em RP")
@@ -2068,8 +2479,8 @@ async def rp_briga(interaction: discord.Interaction, membro: discord.Member, mot
         d += f" — *{motivo}*"
     d += "!"
     embed = discord.Embed(title="💢", description=d, color=discord.Color.orange())
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_danca", description="💃 Dançar em RP")
@@ -2097,8 +2508,8 @@ async def rp_raiva(interaction: discord.Interaction, membro: Optional[discord.Me
     if motivo:
         d += f" — *{motivo}*"
     embed = discord.Embed(title="😡", description=d, color=discord.Color.dark_red())
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_susto", description="😱 Susto em RP")
@@ -2109,8 +2520,8 @@ async def rp_susto(interaction: discord.Interaction, membro: Optional[discord.Me
     else:
         d = f"**{interaction.user.mention}** levou um susto!"
     embed = discord.Embed(title="😱", description=d, color=discord.Color.dark_gray())
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_comemora", description="🎉 Comemorar em RP")
@@ -2123,8 +2534,8 @@ async def rp_comemora(interaction: discord.Interaction, motivo: str = "", membro
     if motivo:
         d += f": *{motivo}*"
     embed = discord.Embed(title="🎉", description=d + "!", color=discord.Color.gold())
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_tristeza", description="💔 Tristeza em RP")
@@ -2134,8 +2545,8 @@ async def rp_tristeza(interaction: discord.Interaction, motivo: str = ""):
     if motivo:
         d += f"\n*{motivo}*"
     embed = discord.Embed(title="💔", description=d, color=discord.Color.dark_blue())
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_curiosidade", description="🔍 Curiosidade em RP")
@@ -2148,8 +2559,8 @@ async def rp_curiosidade(interaction: discord.Interaction, membro: Optional[disc
     if sobre:
         d += f" sobre *{sobre}*"
     embed = discord.Embed(title="🔍", description=d + "…", color=discord.Color.from_str("#87CEEB"))
-    embed.set_image(url=gif)
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = datetime.now(BR_TZ)
+    await enviar_embed_com_gif(interaction, embed, gif)
 
 
 @bot.tree.command(name="rp_acao", description="✨ Ação livre em itálico")
@@ -2181,10 +2592,9 @@ async def rp_carinho(interaction: discord.Interaction, membro: Optional[discord.
     else:
         desc = f"*— {interaction.user.display_name} se enrola num cobertor imaginário.* 🌸"
     emb = discord.Embed(title="🌸 momento fofo", description=desc, color=discord.Color.from_str("#FFB7C5"))
-    emb.set_image(url=gif)
     emb.set_footer(text="RP leve")
     emb.timestamp = datetime.now(BR_TZ)
-    await interaction.response.send_message(embed=emb)
+    await enviar_embed_com_gif(interaction, emb, gif)
 
 
 @bot.tree.command(name="rp_narrar", description="📖 Narração curta (3ª pessoa)")
@@ -2842,8 +3252,7 @@ async def abraco_gif(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} 🤗 {membro.mention}", color=discord.Color.from_str("#FF69B4"))
-    embed.set_image(url=random.choice(gifs_abraco))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_abraco))
 
 
 @bot.tree.command(name="beijo_gif", description="💋")
@@ -2852,8 +3261,7 @@ async def beijo_gif(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} 💋 {membro.mention}", color=discord.Color.red())
-    embed.set_image(url=random.choice(gifs_beijo))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_beijo))
 
 
 @bot.tree.command(name="carinho_gif", description="🥰")
@@ -2862,8 +3270,7 @@ async def carinho_gif(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} 🥰 {membro.mention}", color=discord.Color.purple())
-    embed.set_image(url=random.choice(gifs_carinho))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_carinho))
 
 
 @bot.tree.command(name="cafune_gif", description="😴")
@@ -2872,8 +3279,7 @@ async def cafune_gif(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} faz cafuné em {membro.mention}", color=discord.Color.teal())
-    embed.set_image(url=random.choice(gifs_carinho))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_carinho))
 
 
 @bot.tree.command(name="tapa", description="👋")
@@ -2882,8 +3288,7 @@ async def tapa(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} 👋 {membro.mention}", color=discord.Color.orange())
-    embed.set_image(url=random.choice(gifs_tapa))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_tapa))
 
 
 @bot.tree.command(name="festa", description="🎉")
@@ -2892,8 +3297,7 @@ async def festa(interaction: discord.Interaction, membro: Optional[discord.Membe
         description=f"{interaction.user.mention} festa com {membro.mention}!" if membro else f"{interaction.user.mention} festa!",
         color=discord.Color.gold(),
     )
-    embed.set_image(url=random.choice(gifs_festa))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_festa))
 
 
 @bot.tree.command(name="matar", description="💀 (brincadeira)")
@@ -2902,15 +3306,13 @@ async def matar(interaction: discord.Interaction, membro: discord.Member):
         await interaction.response.send_message("❌", ephemeral=True)
         return
     embed = discord.Embed(description=f"{interaction.user.mention} 💀 {membro.mention} (brincadeira)", color=discord.Color.dark_red())
-    embed.set_image(url=random.choice(gifs_matar))
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, random.choice(gifs_matar))
 
 
 @bot.tree.command(name="chifre", description="🦌")
 async def chifre(interaction: discord.Interaction, membro: discord.Member):
     embed = discord.Embed(description=f"{interaction.user.mention} 🦌 {membro.mention}", color=discord.Color.green())
-    embed.set_image(url="https://media.giphy.com/media/3o7TKsQ8CAGJ6A9p20/giphy.gif")
-    await interaction.response.send_message(embed=embed)
+    await enviar_embed_com_gif(interaction, embed, "https://i.giphy.com/3o7TKsQ8CAGJ6A9p20.gif")
 
 
 @bot.tree.command(name="moeda", description="🪙")
